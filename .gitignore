@@ -1,0 +1,12 @@
+.tmp/
+.tmp-e2e/
+.tmp-host/
+native-host/extension-private-key.pem
+dist/
+node_modules/
+.pnpm-store/
+test-results/
+playwright-report/
+*.log
+native-host/com.subvault.sync.json
+native-host/data/

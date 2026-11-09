@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubVault</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">S</div>
+          <div class="brand-copy">
+            <div class="brand-name">SubVault</div>
+            <div class="brand-tag">本地加密 · 子域可控</div>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button id="lockBtn" class="icon-btn" type="button" title="锁定密码库" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M7 10V8a5 5 0 0 1 10 0v2h1a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z" />
+            </svg>
+          </button>
+          <button id="settingsBtn" class="icon-btn" type="button" title="设置">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9.4 4a7.5 7.5 0 0 0-.08-1.06l2-1.56-2-3.46-2.39.96a7.6 7.6 0 0 0-1.83-1.06L16.74 3h-4l-.36 2.52a7.6 7.6 0 0 0-1.83 1.06L8.16 5.62l-2 3.46 2 1.56A7.5 7.5 0 0 0 8.08 12c0 .36.03.72.08 1.06l-2 1.56 2 3.46 2.39-.96c.56.44 1.17.8 1.83 1.06l.36 2.52h4l.36-2.52a7.6 7.6 0 0 0 1.83-1.06l2.39.96 2-3.46-2-1.56c.05-.34.08-.7.08-1.06Z" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main>
+        <section id="loadingView" class="view loading-view">
+          <div class="spinner"></div>
+          <p>正在打开本地密码库…</p>
+        </section>
+
+        <section id="setupView" class="view" hidden>
+          <div id="syncImportPrompt" class="sync-import-card" hidden>
+            <div class="hero">
+              <div class="hero-icon">S</div>
+              <h1>发现本机已有密码库</h1>
+              <p>是否导入已有密码库？导入会同步原账号和主密码；选择“新安装”会创建全新密码库。</p>
+            </div>
+            <button id="syncImportChoose" class="btn primary block" type="button">导入已有密码库</button>
+            <button id="syncNewInstall" class="btn secondary block" type="button">新安装（不导入）</button>
+          </div>
+
+          <div id="syncImportForm" hidden>
+            <div class="hero">
+              <div class="hero-icon">S</div>
+              <h1>导入已有密码库</h1>
+              <p>输入浏览器 A 的主密码；导入后本机使用该主密码。</p>
+            </div>
+            <label class="field">
+              <span>已有密码库的主密码</span>
+              <input id="syncImportPassword" type="password" autocomplete="current-password" placeholder="输入原主密码" />
+            </label>
+            <p class="form-error" id="syncImportError" hidden></p>
+            <button id="syncImportConfirm" class="btn primary block" type="button">导入并解锁</button>
+            <button id="syncImportBack" class="link-btn block-link" type="button">返回</button>
+          </div>
+
+          <div id="setupForm">
+            <div class="hero">
+            <div class="hero-icon">S</div>
+            <h1>创建本地密码库</h1>
+            <p>主密码只在本机用于加密，SubVault 不上传任何数据。</p>
+          </div>
+          <label class="field">
+            <span>主密码</span>
+            <div class="input-wrap">
+              <input id="setupPassword" type="password" autocomplete="new-password" placeholder="至少 10 个字符" />
+              <button class="reveal" type="button" data-target="setupPassword">显示</button>
+            </div>
+          </label>
+          <div class="strength">
+            <div class="strength-bar"><i id="setupStrengthBar"></i></div>
+            <span id="setupStrengthText">未输入</span>
+          </div>
+          <label class="field">
+            <span>确认主密码</span>
+            <input id="setupConfirm" type="password" autocomplete="new-password" placeholder="再次输入主密码" />
+          </label>
+          <label class="check">
+            <input id="setupAck" type="checkbox" />
+            <span>我明白：忘记主密码将无法恢复密码库</span>
+          </label>
+          <p class="form-error" id="setupError" hidden></p>
+          <button id="setupBtn" class="btn primary block" type="button">创建密码库</button>
+          <p class="fineprint">使用 PBKDF2-HMAC-SHA512 + AES-256-GCM 加密，仅存储在浏览器本地。</p>
+          </div>
+        </section>
+
+        <section id="lockedView" class="view" hidden>
+          <div class="hero">
+            <div class="hero-icon lock">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M7 10V8a5 5 0 0 1 10 0v2h1a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z" />
+              </svg>
+            </div>
+            <h1>解锁密码库</h1>
+            <p>输入主密码，填充并保存当前网站的登录信息。</p>
+          </div>
+          <label class="field">
+            <span>主密码</span>
+            <div class="input-wrap">
+              <input id="unlockPassword" type="password" autocomplete="current-password" placeholder="输入主密码" />
+              <button class="reveal" type="button" data-target="unlockPassword">显示</button>
+            </div>
+          </label>
+          <p class="form-error" id="unlockError" hidden></p>
+          <button id="unlockBtn" class="btn primary block" type="button">解锁</button>
+          <p class="fineprint" id="autoLockHint">空闲后会自动锁定。</p>
+        </section>
+
+        <section id="vaultView" class="view" hidden>
+          <div class="site-card">
+            <div class="site-avatar" id="siteAvatar">?</div>
+            <div class="site-copy">
+              <div class="site-host" id="siteHost">—</div>
+              <div class="site-mode" id="siteMode"></div>
+            </div>
+            <button id="siteSettingsBtn" class="icon-btn" type="button" title="子域名规则">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M4 7h10v2H4V7Zm0 8h4v2H4v-2Zm14-8h2v2h-2V7Zm-6 8h8v2h-8v-2Zm-2-3a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm6 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="actions-row">
+            <button id="addBtn" class="btn primary" type="button">+ 添加账号</button>
+            <button id="manageBtn" class="btn" type="button">管理密码库</button>
+          </div>
+
+          <div id="syncBanner" class="sync-banner" hidden>
+            <strong>本机已有密码库</strong>
+            <p>可从浏览器 A 同步；需要输入原主密码，当前新密码库为空。</p>
+            <button id="syncPullBtn" class="btn secondary block" type="button">同步本机已有数据</button>
+          </div>
+
+          <div id="pendingList" class="pending-list"></div>
+
+          <div class="section-title">
+            <h2>当前网站</h2>
+            <span id="matchCount"></span>
+          </div>
+          <div id="matchList" class="entry-list"></div>
+          <div id="emptyMatches" class="empty" hidden>
+            <div class="empty-icon">◇</div>
+            <p>此网站还没有保存的账号</p>
+            <span>登录一次并保存，或手动添加。</span>
+          </div>
+
+          <div class="privacy-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Zm0 5a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm0 12.8c-2.2-.8-4-2.9-4.7-5.3.7-.8 1.7-1.3 2.7-1.5a5.5 5.5 0 0 0 4 0c1 .2 2 .7 2.7 1.5-.7 2.4-2.5 4.5-4.7 5.3Z" />
+            </svg>
+            <span>数据只保存在本机，不上传、不联网</span>
+            <button id="clearClipboardBtn" class="privacy-link" type="button">清除剪贴板</button>
+          </div>
+        </section>
+      </main>
+
+      <div id="toast" class="toast" hidden></div>
+    </div>
+
+    <dialog id="entryDialog" class="dialog">
+      <div class="dialog-head">
+        <h3>添加账号</h3>
+        <button id="entryClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <label class="field">
+          <span>网站域名</span>
+          <input id="entryHost" type="text" autocomplete="off" placeholder="example.com" />
+        </label>
+        <div class="policy-hint" id="entryPolicyHint"></div>
+        <label class="field">
+          <span>标题（可选）</span>
+          <input id="entryTitle" type="text" autocomplete="off" placeholder="例如：工作邮箱" />
+        </label>
+        <label class="field">
+          <span>用户名</span>
+          <input id="entryUsername" type="text" autocomplete="off" placeholder="账号或邮箱" />
+        </label>
+        <label class="field">
+          <span>密码</span>
+          <div class="input-wrap">
+            <input id="entryPassword" type="password" autocomplete="new-password" placeholder="输入或生成密码" />
+            <button id="entryReveal" class="reveal" type="button">显示</button>
+          </div>
+        </label>
+        <div class="strength">
+          <div class="strength-bar"><i id="entryStrengthBar"></i></div>
+          <span id="entryStrengthText">未输入</span>
+        </div>
+        <button id="entryGenerate" class="btn subtle" type="button">生成强密码</button>
+        <label class="field">
+          <span>备注（可选）</span>
+          <textarea id="entryNotes" rows="2" placeholder="仅保存在本机"></textarea>
+        </label>
+        <p class="form-error" id="entryError" hidden></p>
+      </div>
+      <div class="dialog-actions">
+        <button id="entryCancel" class="btn" type="button">取消</button>
+        <button id="entrySave" class="btn primary" type="button">保存</button>
+      </div>
+    </dialog>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
