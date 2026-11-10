@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubVault 设置</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body class="booting">
+    <div id="shell" class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">S</div>
+          <div>
+            <div class="brand-name">SubVault</div>
+            <div class="brand-tag">本地加密密码库</div>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <button class="nav-item active" type="button" data-section="vault">
+            <span class="nav-dot"></span>密码库
+          </button>
+          <button class="nav-item" type="button" data-section="transfer">
+            <span class="nav-dot"></span>导入与导出
+          </button>
+          <button class="nav-item" type="button" data-section="domains">
+            <span class="nav-dot"></span>子域规则
+          </button>
+          <button class="nav-item" type="button" data-section="security">
+            <span class="nav-dot"></span>安全与接管
+          </button>
+          <button class="nav-item" type="button" data-section="about">
+            <span class="nav-dot"></span>关于
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="lock-line">
+            <span id="lockDot" class="lock-dot"></span>
+            <span id="lockState">已解锁</span>
+          </div>
+          <button id="lockNow" class="link-btn" type="button">立即锁定</button>
+          <div class="local-line">100% 本地 · 无网络请求</div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="page-head">
+          <div>
+            <h1 id="pageTitle">密码库</h1>
+            <p id="pageSub">管理本机保存的登录账号与密码。</p>
+          </div>
+          <div class="head-actions">
+            <span class="privacy-badge">仅保存在本机</span>
+            <button id="headAddBtn" class="btn primary" type="button">+ 添加账号</button>
+          </div>
+        </header>
+
+        <div id="syncBanner" class="sync-banner" hidden>
+          <div>
+            <strong>检测到本机已有 SubVault 密码库</strong>
+            <p>同步会使用已有密码库的主密码；当前新密码库为空，同步后当前主密码将被替换。</p>
+          </div>
+          <button id="syncPullBtn" class="btn primary" type="button">输入原主密码并同步</button>
+        </div>
+
+        <section id="section-vault" class="section">
+          <div class="stats-grid">
+            <div class="stat"><strong id="statTotal">0</strong><span>账号总数</span></div>
+            <div class="stat"><strong id="statHosts">0</strong><span>站点</span></div>
+            <div class="stat warn"><strong id="statWeak">0</strong><span>弱密码</span></div>
+            <div class="stat warn"><strong id="statReused">0</strong><span>重复使用</span></div>
+            <div class="stat warn"><strong id="statOld">0</strong><span>超过 1 年</span></div>
+          </div>
+
+          <div class="toolbar">
+            <div class="search">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M10 4a6 6 0 1 0 3.8 10.7l4.7 4.7 1.4-1.4-4.7-4.7A6 6 0 0 0 10 4Zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z" />
+              </svg>
+              <input id="searchInput" type="search" placeholder="搜索网站、标题或账号…" autocomplete="off" />
+            </div>
+            <select id="filterSelect" aria-label="筛选">
+              <option value="all">全部账号</option>
+              <option value="weak">弱密码</option>
+              <option value="reused">重复使用</option>
+              <option value="old">超过 1 年</option>
+            </select>
+            <select id="sortSelect" aria-label="排序">
+              <option value="host">按网站</option>
+              <option value="updated">最近更新</option>
+              <option value="changed">记录时间</option>
+            </select>
+            <button id="findDuplicatesBtn" class="btn" type="button">检查重复</button>
+          </div>
+
+          <div id="duplicatesPanel" class="result" hidden></div>
+
+          <div id="vaultList" class="vault-list"></div>
+          <div id="vaultEmpty" class="empty" hidden>
+            <div class="empty-icon">◇</div>
+            <h3>这里还没有密码</h3>
+            <p>导入浏览器密码，或手动添加第一条账号。</p>
+          </div>
+          <div class="load-more-wrap">
+            <button id="loadMoreBtn" class="btn" type="button" hidden>显示更多</button>
+          </div>
+        </section>
+
+        <section id="section-transfer" class="section" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>导入浏览器密码</h2>
+                <p>支持 Chrome / Edge / Firefox / Bitwarden / LastPass / 1Password 导出的 CSV。</p>
+              </div>
+              <span class="tag">CSV</span>
+            </div>
+            <ol class="steps">
+              <li>在 Chrome 打开 <code>chrome://password-manager/settings</code>，选择“导出密码”。</li>
+              <li>把导出的 CSV 文件拖到下方，或点击选择文件。</li>
+              <li>导入后建议删除 CSV 文件，因为它是明文。</li>
+            </ol>
+            <div id="dropZone" class="dropzone">
+              <input id="csvFile" type="file" accept=".csv,text/csv" hidden />
+              <button id="chooseCsvBtn" class="btn primary" type="button">选择 CSV 文件</button>
+              <p>或把文件拖到这里</p>
+            </div>
+            <div id="importPreview" class="result preview" hidden></div>
+            <div id="importResult" class="result" hidden></div>
+            <div class="notice">
+              合并规则：默认同一主域下的同一账号只保留“密码记录时间”最新的一条；配置为独立主域后，按每个子域分别合并。
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>加密备份</h2>
+                <p>备份文件本身是 AES-256-GCM 密文，可安全保存到网盘或移动硬盘。</p>
+              </div>
+              <span class="tag">推荐</span>
+            </div>
+            <label class="field">
+              <span>独立备份密码（可选）</span>
+              <input id="exportBackupPassword" type="password" autocomplete="new-password" placeholder="至少 10 位；留空则使用主密码保护" />
+            </label>
+            <div class="notice">
+              备份会包含账号、设置、子域规则和站点忽略列表，但不包含主密码或派生密钥。独立密码会用新的随机盐重新加密，不会保存在扩展里。
+            </div>
+            <div class="button-row">
+              <button id="exportBackupBtn" class="btn primary" type="button">导出加密备份</button>
+              <button id="chooseBackupBtn" class="btn" type="button">选择备份文件</button>
+              <input id="backupFile" type="file" accept=".json,application/json" hidden />
+            </div>
+            <div id="backupFileName" class="file-name" hidden></div>
+            <div class="form-grid two backup-options">
+              <label class="field">
+                <span>恢复方式</span>
+                <select id="backupRestoreMode">
+                  <option value="merge">合并到现有密码库</option>
+                  <option value="replace">覆盖整个密码库</option>
+                </select>
+              </label>
+              <label class="check backup-check">
+                <input id="backupRestoreSettings" type="checkbox" checked />
+                <span>同时恢复设置、子域规则和站点例外</span>
+              </label>
+            </div>
+            <div class="inline-form">
+              <input id="backupPassword" type="password" placeholder="备份文件密码（独立密码或主密码）" autocomplete="off" />
+              <button id="importBackupBtn" class="btn" type="button">恢复备份</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>导出明文 CSV</h2>
+                <p>格式与 Chrome 兼容，可用于迁移到其他密码管理器。</p>
+              </div>
+              <span class="tag danger">明文</span>
+            </div>
+            <div class="warning-box">
+              CSV 中的密码没有任何加密。导出后请立即转移或删除，不要通过聊天软件或邮件发送。
+            </div>
+            <button id="exportCsvBtn" class="btn" type="button">导出明文 CSV</button>
+          </div>
+        </section>
+
+        <section id="section-domains" class="section" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>默认：按主域共享</h2>
+                <p>没有加入下方列表的域名，同一主域下的所有子域共用一个账号。</p>
+              </div>
+              <span class="tag">通用规则</span>
+            </div>
+            <div class="example-row">
+              <span class="example-chip">mail.example.com</span>
+              <span class="example-arrow">↔</span>
+              <span class="example-chip">drive.example.com</span>
+              <span class="example-note">共享 example.com 的账号</span>
+            </div>
+            <label class="switch-row">
+              <span>
+                <strong>localhost / IP 按端口隔离</strong>
+                <small>开启后 localhost:3000 和 localhost:4000 各自独立；普通域名仍忽略端口。</small>
+              </span>
+              <input id="portIsolationToggle" type="checkbox" data-setting="portIsolation" />
+              <span class="switch"></span>
+            </label>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>独立主域名</h2>
+                <p>加入列表后，该主域下的每个子域都作为全新域名单独保存、单独匹配。</p>
+              </div>
+              <span id="domainCount" class="tag">0 个</span>
+            </div>
+            <form id="domainForm" class="inline-form">
+              <input id="domainInput" type="text" placeholder="例如 example.com" autocomplete="off" />
+              <button class="btn primary" type="submit">添加主域</button>
+            </form>
+            <p id="domainError" class="form-error" hidden></p>
+            <div id="domainList" class="domain-list"></div>
+            <div id="domainEmpty" class="empty-small">
+              尚未配置独立主域，当前全部按主域共享。
+            </div>
+            <div class="example-row isolated">
+              <span class="example-chip">mail.example.com</span>
+              <span class="example-arrow">≠</span>
+              <span class="example-chip">drive.example.com</span>
+              <span class="example-note">各自独立保存</span>
+            </div>
+            <div class="notice">
+              修改规则不会删除已有记录；保存和匹配会立即按新规则执行。导入合并也会使用同一套规则。
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>规则预览</h2>
+                <p>输入一个域名，查看它当前会匹配到哪个存储桶。</p>
+              </div>
+            </div>
+            <input id="previewHost" type="text" placeholder="mail.example.com" autocomplete="off" />
+            <div id="previewResult" class="preview-result">输入域名后显示结果</div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>站点例外</h2>
+                <p>对个别网站关闭接管、保存提示或钥匙按钮。例外按完整主机名生效。</p>
+              </div>
+            </div>
+            <form id="exceptionForm" class="inline-form">
+              <input id="exceptionHost" type="text" placeholder="例如 mail.example.com" autocomplete="off" />
+              <button class="btn primary" type="submit">添加例外</button>
+            </form>
+            <div class="exception-flags">
+              <label class="check"><input id="exceptionTakeover" type="checkbox" /><span>不接管 Chrome 自动填充</span></label>
+              <label class="check"><input id="exceptionSave" type="checkbox" /><span>不提示保存</span></label>
+              <label class="check"><input id="exceptionHide" type="checkbox" /><span>隐藏钥匙按钮</span></label>
+            </div>
+            <p id="exceptionError" class="form-error" hidden></p>
+            <div id="exceptionList" class="domain-list"></div>
+            <div id="exceptionEmpty" class="empty-small">尚未配置站点例外。</div>
+          </div>
+        </section>
+
+        <section id="section-security" class="section" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>常规</h2>
+                <p>这些设置只影响本机 SubVault。</p>
+              </div>
+            </div>
+
+            <label class="select-row">
+              <span>
+                <strong>自动锁定</strong>
+                <small>无操作一段时间后清除内存中的解密密钥。</small>
+              </span>
+              <select id="autoLockSelect">
+                <option value="1">1 分钟</option>
+                <option value="5">5 分钟</option>
+                <option value="15">15 分钟</option>
+                <option value="30">30 分钟</option>
+                <option value="60">60 分钟</option>
+                <option value="0">不按时间锁定（系统锁仍可锁）</option>
+              </select>
+            </label>
+            <p class="muted-text auto-lock-note">自动锁定按“最后一次 SubVault 操作”计时；系统锁屏/系统空闲锁定是独立开关，不受这里的分钟数影响。</p>
+
+            <label class="select-row">
+              <span>
+                <strong>复制后清除剪贴板</strong>
+                <small>到期后如果剪贴板仍是刚复制的密码，会尝试清空；浏览器不允许读取剪贴板时请用下方按钮。</small>
+              </span>
+              <select id="clipboardClearSelect">
+                <option value="0">不清除</option>
+                <option value="15">15 秒</option>
+                <option value="30">30 秒</option>
+                <option value="60">60 秒</option>
+                <option value="120">120 秒</option>
+              </select>
+            </label>
+
+            <div class="button-row clipboard-row">
+              <button id="clearClipboardBtn" class="btn" type="button">立即清除剪贴板</button>
+              <span class="muted-text">复制密码后建议尽快清除。</span>
+            </div>
+
+            <div id="storageUsage" class="status-box">本地存储：读取中…</div>
+            <div class="button-row clipboard-row">
+              <button id="enableClipboardReadBtn" class="btn" type="button">允许读取剪贴板（自动清除）</button>
+              <span id="clipboardReadStatus" class="muted-text"></span>
+            </div>
+
+            <label class="switch-row">
+              <span>
+                <strong>提示保存新登录</strong>
+                <small>点击登录按钮或按 Enter 提交后，询问是否保存到密码库。</small>
+              </span>
+              <input id="savePromptToggle" type="checkbox" data-setting="savePrompt" />
+              <span class="switch"></span>
+            </label>
+
+            <label class="select-row">
+              <span>
+                <strong>保存提示位置</strong>
+                <small>左上 / 右上 / 左下 / 右下 / 居中；账号填入、保存成功等所有页面提示都会跟随此位置。</small>
+              </span>
+              <select id="savePromptPositionSelect">
+                <option value="top-right">右上</option>
+                <option value="top-left">左上</option>
+                <option value="bottom-left">左下</option>
+                <option value="bottom-right">右下</option>
+                <option value="center">居中</option>
+              </select>
+            </label>
+
+            <label class="select-row">
+              <span>
+                <strong>主题外观</strong>
+                <small>跟随系统 / 浅色 / 深色；同时影响扩展页面、popup 和网页内的填充提示。</small>
+              </span>
+              <select id="themeSelect">
+                <option value="system">跟随系统</option>
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+              </select>
+            </label>
+
+            <label class="select-row">
+              <span>
+                <strong>界面材质</strong>
+                <small>纯色 / 磨砂玻璃 / 液态玻璃；影响扩展页面、popup、账号选择框和页面提示。</small>
+              </span>
+              <select id="materialSelect">
+                <option value="solid">经典纯色</option>
+                <option value="glass">磨砂玻璃</option>
+                <option value="liquid">液态玻璃</option>
+              </select>
+            </label>
+
+            <label class="switch-row">
+              <span>
+                <strong>显示输入框钥匙按钮</strong>
+                <small>聚焦登录框时显示 SubVault 填充入口。</small>
+              </span>
+              <input id="showIconToggle" type="checkbox" data-setting="showIcon" />
+              <span class="switch"></span>
+            </label>
+
+            <label class="switch-row">
+              <span>
+                <strong>自动填充唯一账号</strong>
+                <small>页面只有一个匹配账号时自动填入，默认关闭。</small>
+              </span>
+              <input id="autoFillToggle" type="checkbox" data-setting="autoFill" />
+              <span class="switch"></span>
+            </label>
+
+            <label class="switch-row">
+              <span>
+                <strong>聚焦时自动弹出账号选择</strong>
+                <small>点击/聚焦登录框后自动打开 popover；不会自动提交。建议删除浏览器自带的已保存密码后再开启。</small>
+              </span>
+              <input id="autoOpenToggle" type="checkbox" data-setting="autoOpenOnFocus" />
+              <span class="switch"></span>
+            </label>
+
+            <label class="switch-row">
+              <span>
+                <strong>系统锁屏时立即锁定</strong>
+                <small>使用 chrome.idle 监听系统锁屏，锁屏后立刻清除内存密钥。</small>
+              </span>
+              <input id="lockOnSystemLockToggle" type="checkbox" data-setting="lockOnSystemLock" />
+              <span class="switch"></span>
+            </label>
+
+            <label class="switch-row">
+              <span>
+                <strong>系统空闲时锁定</strong>
+                <small>系统无输入约 1 分钟后锁定；观看视频时可能误触，默认关闭。</small>
+              </span>
+              <input id="lockOnSystemIdleToggle" type="checkbox" data-setting="lockOnSystemIdle" />
+              <span class="switch"></span>
+            </label>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>接管 Chrome 自带密码管理器</h2>
+                <p>SubVault 会标记登录框、清除 Chrome 原生自动填充，并用自己的面板填充。</p>
+              </div>
+              <span id="takeoverBadge" class="tag">检测中</span>
+            </div>
+
+            <label class="switch-row">
+              <span>
+                <strong>启用接管模式</strong>
+                <small>仅当 SubVault 已有当前网站账号时，才清除 Chrome 的自动填充结果。</small>
+              </span>
+              <input id="takeoverToggle" type="checkbox" data-setting="takeoverMode" />
+              <span class="switch"></span>
+            </label>
+
+            <label class="switch-row">
+              <span>
+                <strong>清除 Chrome 原生自动填充</strong>
+                <small>页面加载后，把 Chrome 自动填入的密码清空，交由 SubVault 选择账号。</small>
+              </span>
+              <input id="clearNativeToggle" type="checkbox" data-setting="clearNativeAutofill" />
+              <span class="switch"></span>
+            </label>
+
+            <div class="divider"></div>
+
+            <label class="switch-row">
+              <span>
+                <strong>关闭 Chrome 的“保存密码”提示</strong>
+                <small>通过 chrome.privacy API 修改 Chrome 全局设置，需要你确认。</small>
+              </span>
+              <input id="chromeSaveToggle" type="checkbox" />
+              <span class="switch"></span>
+            </label>
+
+            <div id="takeoverStatus" class="status-box">正在读取 Chrome 设置…</div>
+            <div class="button-row">
+              <button id="openChromeSettingsBtn" class="btn" type="button">打开 Chrome 密码设置</button>
+              <button id="restoreChromeBtn" class="btn" type="button" hidden>恢复 Chrome 保存提示</button>
+            </div>
+            <div class="warning-box">
+              扩展无法移除输入框内 Chrome 自带的钥匙图标，也无法让 Chrome 彻底停止识别登录表单；接管通过“标记 + 清除原生填充 + 自有面板”实现。关闭 Chrome 保存提示会修改浏览器全局设置，卸载扩展前请先恢复。
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>修改主密码</h2>
+                <p>修改后会用新密钥重新加密整个密码库。</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label class="field">
+                <span>当前主密码</span>
+                <input id="currentPassword" type="password" autocomplete="current-password" />
+              </label>
+              <label class="field">
+                <span>新主密码</span>
+                <input id="newPassword" type="password" autocomplete="new-password" placeholder="至少 10 个字符" />
+              </label>
+              <label class="field">
+                <span>确认新主密码</span>
+                <input id="confirmPassword" type="password" autocomplete="new-password" />
+              </label>
+            </div>
+            <p id="changePasswordError" class="form-error" hidden></p>
+            <button id="changePasswordBtn" class="btn primary" type="button">修改主密码</button>
+          </div>
+
+          <div class="card danger-card">
+            <div class="card-head">
+              <div>
+                <h2>危险操作</h2>
+                <p>以下操作会删除本机密码库，且无法撤销。</p>
+              </div>
+            </div>
+            <div class="button-row">
+              <button id="wipeBtn" class="btn danger" type="button">清空密码库</button>
+              <button id="resetBtn" class="btn danger-ghost" type="button">忘记主密码，重置</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="section-about" class="section" hidden>
+          <div class="card about-hero">
+            <div class="logo large" aria-hidden="true">S</div>
+            <div>
+              <h2>SubVault <span id="versionLabel" class="version"></span></h2>
+              <p>一个只在本机运行的 Chromium 密码管理器。</p>
+            </div>
+          </div>
+          <div class="card">
+            <h2>数据与隐私</h2>
+            <ul class="about-list">
+              <li>密码库使用 PBKDF2-HMAC-SHA512（310,000 次迭代、32 字节随机盐）派生密钥，再用 AES-256-GCM 加密后写入 <code>chrome.storage.local</code>。</li>
+              <li>解锁后仅把派生密钥保存在 <code>chrome.storage.session</code> 内存中，浏览器关闭或自动锁定即清除。</li>
+              <li>备份可以选择独立备份密码：用新的随机盐重新加密，不再依赖主密码。</li>
+              <li>没有云端、没有账号、没有统计和远程请求；所有数据只存在当前浏览器配置中。</li>
+              <li>加密备份可以复制到其他设备，但需要备份文件创建时的主密码才能解密。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h2>权限说明</h2>
+            <ul class="about-list">
+              <li><code>storage</code>：保存加密密码库和设置。</li>
+              <li><code>alarms</code>：每分钟检查是否到达自动锁定时间。</li>
+              <li><code>idle</code>：系统锁屏或空闲时自动锁定。</li>
+              <li><code>activeTab</code>：读取当前标签页域名，用于匹配账号。</li>
+              <li><code>privacy</code>：仅在你手动开启时，关闭 Chrome 自带的“保存密码”提示。</li>
+              <li><code>clipboardRead</code>（可选）：仅在设置页手动授权后，用于确认剪贴板仍是刚复制的密码再自动清空。</li>
+              <li>网页访问权限：在 http/https 登录框中提供填充入口；不读取页面其他内容。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h2>已知边界</h2>
+            <ul class="about-list">
+              <li>Chrome 不允许扩展移除输入框内的原生钥匙图标，也无法通过扩展 API 完全停用密码管理器；只能尽量抑制自动填充并接管交互。</li>
+              <li>浏览器导出的 Chrome/Edge CSV 不含时间列，SubVault 会使用文件修改时间作为记录时间。</li>
+              <li>主密码无法找回；忘记后只能重置密码库。</li>
+              <li>CSV 导出是明文，请在设置页二次验证主密码后妥善处理。</li>
+              <li>所有账号数据都通过 DOM 文本节点写入页面，不使用 innerHTML 拼接用户数据。</li>
+              <li>扩展没有任意文件系统路径：数据在扩展存储中，导出文件由浏览器下载目录管理。</li>
+            </ul>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="gate" class="gate" hidden>
+      <div class="gate-card">
+        <div class="logo large" aria-hidden="true">S</div>
+        <h1 id="gateTitle">解锁 SubVault</h1>
+        <p id="gateSub">输入主密码以管理本机密码库。</p>
+
+        <div id="gateImportPrompt" class="gate-import" hidden>
+          <strong>导入会同步账号和主密码</strong>
+          <p>导入后本机直接使用原密码库的主密码；选择“新安装”会创建全新密码库，不导入本机数据。</p>
+          <button id="gateImportChoose" class="btn primary block" type="button">导入已有密码库</button>
+          <button id="gateNewInstall" class="btn secondary block" type="button">新安装（不导入）</button>
+        </div>
+
+        <form id="gateImportForm" class="gate-form" hidden>
+          <p class="gate-import-note">请输入浏览器 A 的主密码；导入后本机使用该主密码。</p>
+          <div class="input-wrap">
+            <input id="gateImportPassword" type="password" autocomplete="current-password" placeholder="已有密码库的主密码" />
+          </div>
+          <button id="gateImportBtn" class="btn primary block" type="button">导入并解锁</button>
+          <button id="gateImportBack" class="link-btn" type="button">返回</button>
+        </form>
+
+        <form id="gateUnlockForm" class="gate-form">
+          <div class="input-wrap">
+            <input id="gatePassword" type="password" autocomplete="current-password" placeholder="主密码" />
+            <button class="reveal" type="button" data-target="gatePassword">显示</button>
+          </div>
+          <button id="gateUnlockBtn" class="btn primary block" type="submit">解锁</button>
+        </form>
+
+        <form id="gateSetupForm" class="gate-form" hidden>
+          <div class="input-wrap">
+            <input id="gateNewPassword" type="password" autocomplete="new-password" placeholder="设置主密码（至少 10 个字符）" />
+            <button class="reveal" type="button" data-target="gateNewPassword">显示</button>
+          </div>
+          <div class="input-wrap">
+            <input id="gateConfirmPassword" type="password" autocomplete="new-password" placeholder="确认主密码" />
+          </div>
+          <label class="check">
+            <input id="gateAck" type="checkbox" />
+            <span>我明白：忘记主密码将无法恢复密码库</span>
+          </label>
+          <button id="gateSetupBtn" class="btn primary block" type="submit">创建本地密码库</button>
+        </form>
+
+        <p id="gateError" class="form-error" hidden></p>
+        <p class="gate-foot">主密码只在本机使用 · 不上传、不联网</p>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <dialog id="entryDialog" class="dialog">
+      <div class="dialog-head">
+        <h3 id="entryDialogTitle">添加账号</h3>
+        <button id="entryClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="form-grid two">
+          <label class="field">
+            <span>网站域名</span>
+            <input id="entryHost" type="text" autocomplete="off" placeholder="example.com" />
+          </label>
+          <label class="field">
+            <span>标题（可选）</span>
+            <input id="entryTitle" type="text" autocomplete="off" placeholder="工作邮箱" />
+          </label>
+        </div>
+        <div id="entryPolicyHint" class="policy-hint"></div>
+        <div class="form-grid two">
+          <label class="field">
+            <span>用户名</span>
+            <input id="entryUsername" type="text" autocomplete="off" placeholder="账号或邮箱" />
+          </label>
+          <label class="field">
+            <span>密码</span>
+            <div class="input-wrap">
+              <input id="entryPassword" type="password" autocomplete="new-password" />
+              <button id="entryReveal" class="reveal" type="button">显示</button>
+            </div>
+          </label>
+        </div>
+        <div class="strength">
+          <div class="strength-bar"><i id="entryStrengthBar"></i></div>
+          <span id="entryStrengthText">未输入</span>
+        </div>
+        <div class="dialog-tools">
+          <button id="entryGenerate" class="btn subtle" type="button">生成强密码</button>
+          <span id="entryTimeLabel" class="muted-text"></span>
+        </div>
+        <label class="field">
+          <span>备注（可选）</span>
+          <textarea id="entryNotes" rows="3" placeholder="只保存在本机"></textarea>
+        </label>
+        <label class="field">
+          <span>TOTP 密钥（可选，Base32）</span>
+          <input id="entryTotp" type="text" autocomplete="off" placeholder="例如 JBSWY3DPEHPK3PXP" />
+        </label>
+        <p id="entryError" class="form-error" hidden></p>
+      </div>
+      <div class="dialog-actions">
+        <button id="entryCancel" class="btn" type="button">取消</button>
+        <button id="entrySave" class="btn primary" type="button">保存</button>
+      </div>
+    </dialog>
+
+    <dialog id="dangerDialog" class="dialog small">
+      <div class="dialog-head">
+        <h3 id="dangerTitle">确认操作</h3>
+        <button id="dangerClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <p id="dangerMessage" class="danger-message"></p>
+        <label class="field" id="dangerPasswordField">
+          <span>主密码</span>
+          <input id="dangerPassword" type="password" autocomplete="current-password" />
+        </label>
+        <label class="field">
+          <span>输入 <code>清空密码库</code> 确认</span>
+          <input id="dangerConfirm" type="text" autocomplete="off" />
+        </label>
+        <p id="dangerError" class="form-error" hidden></p>
+      </div>
+      <div class="dialog-actions">
+        <button id="dangerCancel" class="btn" type="button">取消</button>
+        <button id="dangerAction" class="btn danger" type="button">确认</button>
+      </div>
+    </dialog>
+
+    <dialog id="totpDialog" class="dialog small">
+      <div class="dialog-head">
+        <h3 id="totpTitle">动态码</h3>
+        <button id="totpClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body totp-body">
+        <div id="totpCode" class="totp-code">------</div>
+        <div id="totpMeta" class="muted-text"></div>
+        <div class="button-row">
+          <button id="totpCopyBtn" class="btn primary" type="button">复制动态码</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="historyDialog" class="dialog small">
+      <div class="dialog-head">
+        <h3>密码历史</h3>
+        <button id="historyClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <p class="danger-message">历史密码仍是敏感信息；确认不需要后再关闭。</p>
+        <div id="historyList" class="history-list"></div>
+      </div>
+    </dialog>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
