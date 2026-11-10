@@ -131,6 +131,15 @@ export function mergeEntries(existingEntries, incomingEntries, options = {}) {
         entry.passwordChangedAt = winnerTime;
         entry.updatedAt = now;
         entry.source = source;
+        if (winner.favorite !== undefined) entry.favorite = Boolean(winner.favorite);
+        if (Array.isArray(winner.tags) && winner.tags.length) entry.tags = winner.tags;
+        if (winner.folder) entry.folder = winner.folder;
+        if (winner.totpSecret) {
+          entry.totpSecret = winner.totpSecret;
+          entry.totpDigits = winner.totpDigits || 6;
+          entry.totpPeriod = winner.totpPeriod || 30;
+          entry.totpAlgorithm = winner.totpAlgorithm || 'SHA1';
+        }
         updated += 1;
       }
     }
@@ -147,6 +156,13 @@ export function mergeEntries(existingEntries, incomingEntries, options = {}) {
         password: winner.password,
         notes: winner.notes || '',
         url: winner.url || `https://${host}/`,
+        totpSecret: winner.totpSecret || '',
+        totpDigits: winner.totpDigits || 6,
+        totpPeriod: winner.totpPeriod || 30,
+        totpAlgorithm: winner.totpAlgorithm || 'SHA1',
+        favorite: Boolean(winner.favorite),
+        tags: Array.isArray(winner.tags) ? winner.tags : [],
+        folder: winner.folder || '',
         source,
         createdAt: now,
         updatedAt: now,

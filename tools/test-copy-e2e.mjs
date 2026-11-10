@@ -34,7 +34,7 @@ try {
   await page.evaluate(() =>
     chrome.runtime.sendMessage({
       type: 'SV_SET_SETTINGS',
-      settings: { theme: 'dark', material: 'liquid' },
+      settings: { theme: 'dark', material: 'liquid', lockOnSystemLock: false, lockOnSystemIdle: false },
     }),
   );
   await page.waitForTimeout(250);

@@ -21,6 +21,7 @@
     isolated: false,
     settings: { ...DEFAULTS },
     settingsLoaded: false,
+    settingsVersion: 0,
     matches: [],
     matchesAt: 0,
     matchesHost: '',
@@ -412,7 +413,9 @@
 
   async function getSettings() {
     if (state.settingsLoaded) return state.settings;
+    const version = state.settingsVersion;
     const result = await send('SV_GET_SETTINGS');
+    if (version !== state.settingsVersion) return state.settings;
     if (result.ok && result.settings) {
       state.settings = { ...DEFAULTS, ...result.settings };
       state.settingsLoaded = true;
@@ -485,15 +488,38 @@
     const usernameField = findUsernameField(passwordField);
     if (usernameField && result.username) setNativeValue(usernameField, result.username);
     setNativeValue(passwordField, result.password);
+    let otpFilled = false;
+    if (result.totpCode) {
+      const otpField = findOtpField(passwordField);
+      if (otpField) {
+        setNativeValue(otpField, result.totpCode);
+        otpFilled = true;
+      }
+    }
     passwordField.focus({ preventScroll: true });
     hidePanel();
     hideTrigger();
     if (!silent) {
       const account = result.username || result.title || '当前账号';
-      const detail = result.title && result.title !== account ? `已填入账号 · ${result.title}` : '已填入账号';
-      showToast(account, detail);
+      const detail = result.title && result.title !== account
+        ? `已填入账号 · ${result.title}`
+        : '已填入账号';
+      showToast(account, otpFilled ? `${detail}和动态码` : detail);
     }
     return true;
+  }
+
+  function findOtpField(passwordField) {
+    const form = passwordField?.closest?.('form');
+    const candidates = form ? collectInputs(form) : collectInputs(document);
+    return candidates.find(
+      (input) =>
+        input instanceof HTMLInputElement &&
+        !input.disabled &&
+        !input.readOnly &&
+        looksLikeOtp(input) &&
+        isVisible(input),
+    ) || null;
   }
 
   function pickPasswordField() {
@@ -882,7 +908,7 @@
       event.preventDefault();
       event.stopPropagation();
       if (state.panelOpen) hidePanel();
-      else void openPanel(state.activePassword || pickPasswordField());
+      else void openPanel(state.anchorField || state.activePassword || pickPasswordField());
     });
 
     ui.panelClose.addEventListener('click', () => hidePanel());
@@ -1683,6 +1709,7 @@
     if (area !== 'local' || !changes.settings) return;
     state.settings = { ...DEFAULTS, ...(changes.settings.newValue || {}) };
     state.settingsLoaded = true;
+    state.settingsVersion += 1;
     applyBannerPosition();
     if (!state.settings.showIcon) hideTrigger();
   });
@@ -1696,6 +1723,14 @@
     if (message.type === 'SV_FILL_SHORTCUT') {
       void handleShortcut();
       sendResponse({ ok: true });
+      return undefined;
+    }
+    if (message.type === 'SV_SETTINGS_CHANGED') {
+      state.settings = { ...DEFAULTS, ...(message.settings || {}) };
+      state.settingsLoaded = true;
+      state.settingsVersion += 1;
+      applyBannerPosition();
+      if (!state.settings.showIcon) hideTrigger();
       return undefined;
     }
     if (message.type === 'SV_LOCKED') {

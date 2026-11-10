@@ -19,6 +19,8 @@ import {
 } from '../lib/domain.js';
 import { generatePassword } from '../lib/generator.js';
 import { passwordStrength } from '../lib/crypto.js';
+import { parseOtpAuthUri } from '../lib/totp.js';
+import { parseImportFile } from '../lib/importers.js';
 
 const $ = (id) => document.getElementById(id);
 const toast = makeToast($('toast'));
@@ -37,6 +39,7 @@ const state = {
   loaded: false,
   loadingAll: false,
   entries: [],
+  selected: new Set(),
   stats: null,
   settings: {
     autoLockMinutes: 15,
@@ -65,6 +68,7 @@ const state = {
   backupText: '',
   backupName: '',
   pendingImport: null,
+  entryTotpMeta: null,
   dangerMode: '',
   revealTimers: new Map(),
 };
@@ -304,6 +308,7 @@ async function loadAll() {
     renderUsage();
     void refreshClipboardPermission();
     void refreshSyncBanner();
+    void refreshBackupHealth();
     $('versionLabel').textContent = `v${chrome.runtime.getManifest().version}`;
   } finally {
     state.loadingAll = false;
@@ -323,28 +328,37 @@ function renderStats() {
   $('statWeak').textContent = stats.weak ?? 0;
   $('statReused').textContent = stats.reused ?? 0;
   $('statOld').textContent = stats.old ?? 0;
+  $('statHttp').textContent = stats.http ?? 0;
 }
 
 function filteredEntries() {
   const query = state.search.trim().toLowerCase();
   let list = state.entries.filter((entry) => {
     if (query) {
-      const haystack = `${entry.host} ${entry.title} ${entry.username}`.toLowerCase();
+      const haystack = `${entry.host} ${entry.title} ${entry.username} ${entry.folder || ''} ${
+        (entry.tags || []).join(' ')
+      }`.toLowerCase();
       if (!haystack.includes(query)) return false;
     }
+    if (state.filter === 'favorite' && !entry.favorite) return false;
+    if (state.filter === 'recent' && !entry.lastUsedAt) return false;
     if (state.filter === 'weak' && !entry.weak) return false;
     if (state.filter === 'reused' && !entry.reused) return false;
     if (state.filter === 'old' && !entry.old) return false;
+    if (state.filter === 'http' && !entry.http) return false;
     return true;
   });
 
-  if (state.sort === 'updated') {
+  if (state.sort === 'recent') {
+    list = [...list].sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0));
+  } else if (state.sort === 'updated') {
     list = [...list].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   } else if (state.sort === 'changed') {
     list = [...list].sort((a, b) => (b.passwordChangedAt || 0) - (a.passwordChangedAt || 0));
   } else {
     list = [...list].sort(
       (a, b) =>
+        Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)) ||
         a.host.localeCompare(b.host) ||
         (a.username || '').localeCompare(b.username || ''),
     );
@@ -376,10 +390,58 @@ function renderVault() {
   const remaining = list.length - visible.length;
   $('loadMoreBtn').hidden = remaining <= 0;
   $('loadMoreBtn').textContent = `显示更多（剩余 ${remaining} 条）`;
+  renderBulkBar();
+}
+
+function renderBulkBar() {
+  for (const id of [...state.selected]) {
+    if (!state.entries.some((entry) => entry.id === id)) state.selected.delete(id);
+  }
+  const bar = $('bulkBar');
+  bar.hidden = state.selected.size === 0;
+  $('bulkCount').textContent = `已选 ${state.selected.size} 项`;
+}
+
+async function bulkSetFavorite(favorite) {
+  if (state.selected.size === 0) return;
+  const result = await send('SV_BULK_UPDATE', {
+    ids: [...state.selected],
+    favorite,
+  });
+  if (!result.ok) {
+    handleError(result, '批量收藏失败');
+    return;
+  }
+  toast(`已更新 ${result.updated || 0} 个账号的收藏状态`);
+  state.selected.clear();
+  await loadAll();
+}
+
+async function bulkDelete() {
+  if (state.selected.size === 0) return;
+  if (!window.confirm(`确定删除选中的 ${state.selected.size} 个账号吗？`)) return;
+  const result = await send('SV_BULK_DELETE', { ids: [...state.selected] });
+  if (!result.ok) {
+    handleError(result, '批量删除失败');
+    return;
+  }
+  toast(`已删除 ${result.deleted || 0} 个账号`);
+  state.selected.clear();
+  await loadAll();
 }
 
 function renderEntry(entry) {
   const card = div('entry-card');
+  const select = document.createElement('input');
+  select.type = 'checkbox';
+  select.className = 'entry-select';
+  select.checked = state.selected.has(entry.id);
+  select.title = '选择此账号';
+  select.addEventListener('change', () => {
+    if (select.checked) state.selected.add(entry.id);
+    else state.selected.delete(entry.id);
+    renderBulkBar();
+  });
   const avatar = div('entry-avatar');
   avatar.textContent = (entry.title || entry.host || '?').trim().charAt(0).toUpperCase() || '?';
 
@@ -389,6 +451,7 @@ function renderEntry(entry) {
   if (entry.weak) titleRow.appendChild(span('badge weak', '弱密码'));
   if (entry.reused) titleRow.appendChild(span('badge reused', '重复使用'));
   if (entry.old) titleRow.appendChild(span('badge old', '超过 1 年'));
+  if (entry.http) titleRow.appendChild(span('badge http', 'HTTP 明文'));
   const isolated = isHostIsolated(entry.host, state.settings.isolatedDomains || []);
   titleRow.appendChild(span('badge scope', isolated ? '独立子域' : '主域共享'));
 
@@ -396,6 +459,10 @@ function renderEntry(entry) {
   sub.append(span('', entry.port ? `${entry.host}:${entry.port}` : entry.host));
   sub.append(span('dot'));
   sub.append(span('', entry.username || '无用户名'));
+  if (entry.folder) sub.append(span('badge scope', entry.folder));
+  for (const tag of (entry.tags || []).slice(0, 3)) {
+    sub.append(span('badge tag', `#${tag}`));
+  }
 
   const meta = div(
     'entry-meta',
@@ -406,21 +473,35 @@ function renderEntry(entry) {
   main.append(titleRow, sub, meta);
 
   const actions = div('entry-actions');
+  const favoriteButton = miniButton(entry.favorite ? '★ 收藏' : '☆ 收藏');
+  favoriteButton.classList.add('favorite');
+  favoriteButton.title = entry.favorite ? '取消收藏' : '收藏账号';
+  favoriteButton.addEventListener('click', async () => {
+    const result = await send('SV_TOGGLE_FAVORITE', { id: entry.id });
+    if (!result.ok) {
+      handleError(result, '更新收藏失败');
+      return;
+    }
+    entry.favorite = Boolean(result.favorite);
+    renderVault();
+  });
   const revealButton = miniButton('显示');
   const copyButton = miniButton('复制');
   const editButton = miniButton('编辑');
   const deleteButton = miniButton('删除', 'danger');
-  if (entry.hasTotp) {
-    const totpButton = miniButton('动态码');
-    totpButton.addEventListener('click', () => void openTotp(entry));
-    actions.append(totpButton);
-  }
-  if (entry.historyCount) {
-    const historyButton = miniButton('历史');
-    historyButton.addEventListener('click', () => void openHistory(entry));
-    actions.append(historyButton);
-  }
-  actions.append(revealButton, copyButton, editButton, deleteButton);
+  const totpButton = entry.hasTotp ? miniButton('动态码') : null;
+  if (totpButton) totpButton.addEventListener('click', () => void openTotp(entry));
+  const historyButton = entry.historyCount ? miniButton('历史') : null;
+  if (historyButton) historyButton.addEventListener('click', () => void openHistory(entry));
+  actions.append(
+    favoriteButton,
+    ...(totpButton ? [totpButton] : []),
+    ...(historyButton ? [historyButton] : []),
+    revealButton,
+    copyButton,
+    editButton,
+    deleteButton,
+  );
 
   const secretRow = div('secret-row');
   secretRow.hidden = true;
@@ -458,7 +539,7 @@ function renderEntry(entry) {
   editButton.addEventListener('click', () => void openEntryDialog(entry.id));
   deleteButton.addEventListener('click', () => void deleteEntry(entry));
 
-  card.append(avatar, main, actions, secretRow);
+  card.append(select, avatar, main, actions, secretRow);
   return card;
 }
 
@@ -678,6 +759,7 @@ async function mergeDuplicateGroup(group) {
 async function openEntryDialog(id = null) {
   setError($('entryError'), '');
   state.editingId = id;
+  state.entryTotpMeta = null;
   $('entryDialogTitle').textContent = id ? '编辑账号' : '添加账号';
   $('entryPassword').type = 'password';
   $('entryReveal').textContent = '显示';
@@ -697,6 +779,19 @@ async function openEntryDialog(id = null) {
     $('entryPassword').value = result.password || '';
     $('entryNotes').value = result.notes || '';
     $('entryTotp').value = result.totpSecret || '';
+    state.entryTotpMeta = result.totpSecret
+      ? {
+          digits: result.totpDigits || 6,
+          period: result.totpPeriod || 30,
+          algorithm: result.totpAlgorithm || 'SHA1',
+        }
+      : null;
+    $('entryTotpHint').textContent = result.totpSecret
+      ? '已配置 TOTP；可粘贴新的 otpauth 链接替换。'
+      : '';
+    $('entryFolder').value = result.folder || '';
+    $('entryTags').value = Array.isArray(result.tags) ? result.tags.join(', ') : '';
+    $('entryFavorite').checked = Boolean(result.favorite);
     $('entryTimeLabel').textContent = `密码记录于 ${formatDateTime(
       result.passwordChangedAt,
     )}；修改密码会更新为当前时间。`;
@@ -707,6 +802,10 @@ async function openEntryDialog(id = null) {
     $('entryPassword').value = '';
     $('entryNotes').value = '';
     $('entryTotp').value = '';
+    $('entryTotpHint').textContent = '';
+    $('entryFolder').value = '';
+    $('entryTags').value = '';
+    $('entryFavorite').checked = false;
   }
 
   updateEntryPolicyHint();
@@ -728,6 +827,33 @@ function updateEntryPolicyHint() {
     hint.textContent = `独立子域：账号只匹配 ${host}，不会与同主域的其他子域共享。`;
   } else {
     hint.textContent = `主域共享：${suggestBaseDomain(host)} 下的所有子域共用这个账号。`;
+  }
+}
+
+async function importTotpQr(file) {
+  if (!file) return;
+  const hint = $('entryTotpHint');
+  if (!('BarcodeDetector' in window)) {
+    hint.textContent = '当前 Chrome 不支持二维码识别，请直接粘贴 otpauth 链接。';
+    return;
+  }
+  try {
+    const detector = new BarcodeDetector({ formats: ['qr_code'] });
+    const bitmap = await createImageBitmap(file);
+    const codes = await detector.detect(bitmap);
+    const raw = codes[0]?.rawValue?.trim();
+    if (!raw) throw new Error('图片中没有识别到二维码');
+    if (parseOtpAuthUri(raw)) {
+      $('entryTotp').value = raw;
+      hint.textContent = '已识别 otpauth 链接，保存时会解析密钥和参数。';
+    } else if (/^[A-Z2-7\s-]+=*$/i.test(raw)) {
+      $('entryTotp').value = raw;
+      hint.textContent = '已识别 Base32 密钥。';
+    } else {
+      throw new Error('二维码不是 TOTP 密钥');
+    }
+  } catch (error) {
+    hint.textContent = error?.message || '二维码识别失败';
   }
 }
 
@@ -758,6 +884,12 @@ async function saveEntry() {
     password,
     notes: $('entryNotes').value,
     totpSecret: $('entryTotp').value.trim(),
+    totpDigits: state.entryTotpMeta?.digits,
+    totpPeriod: state.entryTotpMeta?.period,
+    totpAlgorithm: state.entryTotpMeta?.algorithm,
+    favorite: $('entryFavorite').checked,
+    tags: $('entryTags').value,
+    folder: $('entryFolder').value.trim(),
     url: parsedHost?.href || `https://${host}${port ? `:${port}` : ''}/`,
   };
   const result = state.editingId
@@ -1119,6 +1251,35 @@ async function importCsvFile(file) {
   const zone = $('dropZone');
   zone.classList.add('busy');
   try {
+    const lowerName = file.name.toLowerCase();
+    if (!/\.(csv|json|1pux)$/i.test(lowerName)) {
+      throw new Error('请选择 CSV、Bitwarden JSON 或 1PUX 文件');
+    }
+    if (!lowerName.endsWith('.csv')) {
+      const parsed = await parseImportFile(file);
+      const preview = await send('SV_PREVIEW_IMPORT_ROWS', {
+        entries: parsed.entries,
+        skipped: parsed.skipped,
+        total: parsed.total,
+        format: parsed.format,
+        warnings: parsed.warnings,
+      });
+      if (!preview.ok) {
+        showImportError(preview.error || '导入预演失败');
+        return;
+      }
+      state.pendingImport = {
+        kind: 'rows',
+        entries: parsed.entries,
+        skipped: parsed.skipped,
+        total: parsed.total,
+        format: parsed.format,
+        warnings: parsed.warnings,
+        fileName: file.name,
+      };
+      showImportPreview(preview, file.name);
+      return;
+    }
     const text = await file.text();
     const preview = await send('SV_PREVIEW_CSV', {
       text,
@@ -1130,6 +1291,7 @@ async function importCsvFile(file) {
       return;
     }
     state.pendingImport = {
+      kind: 'csv',
       text,
       fileLastModified: file.lastModified,
       fileName: file.name,
@@ -1160,8 +1322,8 @@ function showImportPreview(result, fileName) {
     div(
       '',
       result.hasTimestamps
-        ? '时间依据：CSV 中的密码更改时间列。'
-        : '时间依据：文件没有时间列，使用文件修改时间。',
+        ? `时间依据：${result.format || '导入文件'} 中的密码更改时间。`
+        : '时间依据：文件没有时间信息，使用当前时间或文件修改时间。',
     ),
   );
 
@@ -1240,11 +1402,20 @@ async function confirmCsvImport(button) {
     );
 
     button.textContent = '正在导入…';
-    const result = await send('SV_IMPORT_CSV', {
-      text: state.pendingImport.text,
-      fileLastModified: state.pendingImport.fileLastModified,
-      fileName: state.pendingImport.fileName,
-    });
+    const result =
+      state.pendingImport.kind === 'rows'
+        ? await send('SV_IMPORT_ROWS', {
+            entries: state.pendingImport.entries,
+            skipped: state.pendingImport.skipped,
+            total: state.pendingImport.total,
+            format: state.pendingImport.format,
+            warnings: state.pendingImport.warnings,
+          })
+        : await send('SV_IMPORT_CSV', {
+            text: state.pendingImport.text,
+            fileLastModified: state.pendingImport.fileLastModified,
+            fileName: state.pendingImport.fileName,
+          });
     if (!result.ok) {
       showImportError(result.error || '导入失败');
       return;
@@ -1328,6 +1499,74 @@ async function exportCsv() {
   toast('明文 CSV 已导出，请妥善保管');
 }
 
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function refreshBackupHealth() {
+  const box = $('backupHealth');
+  let meta = null;
+  try {
+    meta = (await chrome.storage.local.get('backupMeta')).backupMeta || null;
+  } catch {
+    meta = null;
+  }
+  if (!meta?.at) {
+    box.className = 'status-box warn';
+    box.textContent = '最近备份：尚未记录。建议立即导出一次加密备份。';
+    return;
+  }
+  const days = Math.floor((Date.now() - Number(meta.at)) / 86_400_000);
+  box.className = days > 30 ? 'status-box warn' : 'status-box';
+  box.textContent = `最近备份：${formatDateTime(meta.at)}（${days} 天前）${
+    meta.checksum ? ` · SHA-256 ${meta.checksum.slice(0, 12)}…` : ''
+  }${days > 30 ? '。建议重新备份。' : ''}`;
+}
+
+async function verifyBackupStructure() {
+  if (!state.backupText) {
+    toast('请先选择备份文件', { error: true });
+    return;
+  }
+  try {
+    const parsed = JSON.parse(state.backupText);
+    if (!parsed || typeof parsed !== 'object' || !parsed.box) {
+      throw new Error('不是 SubVault 加密备份');
+    }
+    toast('备份结构有效', '加密数据存在，恢复时仍需校验密码。');
+  } catch (error) {
+    toast('备份校验失败', error?.message || 'JSON 格式无效', { error: true });
+  }
+}
+
+function downloadRecoveryKit() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const lines = [
+    'SubVault Recovery Kit',
+    '',
+    `生成时间：${new Date().toLocaleString()}`,
+    `扩展版本：${chrome.runtime.getManifest().version}`,
+    `账号数量：${state.entries.length}`,
+    '',
+    '重要说明：',
+    '1. SubVault 没有云端账号，也没有服务器端恢复通道。',
+    '2. 加密备份必须配合备份创建时的主密码或独立备份密码使用。',
+    '3. 主密码、独立备份密码和恢复文件应分开保存在安全位置。',
+    '4. 不要通过聊天软件、邮件或普通网盘明文传输主密码。',
+    '',
+    '恢复步骤：',
+    '1. 安装同版本或更新版本的 SubVault。',
+    '2. 打开设置 → 导入与导出。',
+    '3. 选择加密备份文件并输入对应密码。',
+    '4. 先在空密码库或合并模式中验证账号，再执行覆盖恢复。',
+    '',
+    '如需重新导出，请在设置页点击“导出加密备份”。',
+  ];
+  downloadText(`subvault-recovery-kit-${stamp}.txt`, lines.join('\n'), 'text/plain;charset=utf-8');
+  toast('恢复说明已下载', '请与加密备份分开保存。');
+}
+
 async function exportBackup() {
   const backupPassword = $('exportBackupPassword').value;
   if (backupPassword && backupPassword.length < 10) {
@@ -1348,12 +1587,19 @@ async function exportBackup() {
     return;
   }
   const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+  const checksum = await sha256Hex(result.backup);
   downloadText(`subvault-backup-${stamp}.json`, result.backup, 'application/json');
+  downloadText(`subvault-backup-${stamp}.sha256`, `${checksum}  subvault-backup-${stamp}.json\n`);
+  await chrome.storage.local.set({
+    backupMeta: { at: Date.now(), checksum, independent: Boolean(result.independent) },
+  });
+  await refreshBackupHealth();
   $('exportBackupPassword').value = '';
   toast(
     result.independent
       ? '已导出独立密码加密的备份，请单独保管该密码'
       : '已导出主密码加密的备份',
+    `SHA-256 ${checksum.slice(0, 12)}…`,
   );
 }
 
@@ -1697,6 +1943,13 @@ function bindEvents() {
     renderVault();
   });
   $('findDuplicatesBtn').addEventListener('click', () => void findDuplicates());
+  $('bulkFavoriteBtn').addEventListener('click', () => void bulkSetFavorite(true));
+  $('bulkUnfavoriteBtn').addEventListener('click', () => void bulkSetFavorite(false));
+  $('bulkDeleteBtn').addEventListener('click', () => void bulkDelete());
+  $('bulkClearBtn').addEventListener('click', () => {
+    state.selected.clear();
+    renderVault();
+  });
 
   $('entryClose').addEventListener('click', () => $('entryDialog').close());
   $('entryCancel').addEventListener('click', () => $('entryDialog').close());
@@ -1721,6 +1974,29 @@ function bindEvents() {
     $('entryPassword').type = 'text';
     $('entryReveal').textContent = '隐藏';
     updateStrength($('entryPassword'), $('entryStrengthBar'), $('entryStrengthText'));
+  });
+  $('entryTotp').addEventListener('input', () => {
+    state.entryTotpMeta = null;
+    const raw = $('entryTotp').value.trim();
+    if (!raw) {
+      $('entryTotpHint').textContent = '';
+      return;
+    }
+    try {
+      const parsed = parseOtpAuthUri(raw);
+      $('entryTotpHint').textContent = parsed
+        ? `${parsed.issuer || 'TOTP'} · ${parsed.account || '账号'} · ${parsed.algorithm} / ${parsed.period}s`
+        : 'Base32 密钥；保存时校验。';
+    } catch (error) {
+      $('entryTotpHint').textContent = error?.message || 'otpauth 链接无效';
+    }
+  });
+  $('entryTotpQrBtn').addEventListener('click', () => $('entryTotpQrFile').click());
+  $('entryTotpQrFile').addEventListener('change', () => {
+    const file = $('entryTotpQrFile').files?.[0];
+    void importTotpQr(file).finally(() => {
+      $('entryTotpQrFile').value = '';
+    });
   });
   $('entryReveal').addEventListener('click', () => {
     const input = $('entryPassword');
@@ -1831,6 +2107,8 @@ function bindEvents() {
 
   $('exportCsvBtn').addEventListener('click', () => void exportCsv());
   $('exportBackupBtn').addEventListener('click', () => void exportBackup());
+  $('recoveryKitBtn').addEventListener('click', downloadRecoveryKit);
+  $('verifyBackupBtn').addEventListener('click', () => void verifyBackupStructure());
   $('chooseBackupBtn').addEventListener('click', () => $('backupFile').click());
   $('backupFile').addEventListener('change', async () => {
     const file = $('backupFile').files?.[0];

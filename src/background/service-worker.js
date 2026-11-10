@@ -39,7 +39,7 @@ import {
 } from '../lib/domain.js';
 import { csvToEntries, entriesToCsv } from '../lib/csv.js';
 import { entryTime, conflictGroupKey, mergeEntries } from '../lib/merge.js';
-import { generateTotp, isValidTotpSecret, normalizeTotpSecret } from '../lib/totp.js';
+import { generateTotp, isValidTotpSecret, normalizeTotpSecret, parseOtpAuthUri } from '../lib/totp.js';
 
 const AAD = 'subvault:vault:v1';
 const AAD_BACKUP = 'subvault:backup:v1';
@@ -879,6 +879,17 @@ function clampText(value, max) {
   return String(value ?? '').slice(0, max);
 }
 
+function normalizeTags(value) {
+  const list = Array.isArray(value)
+    ? value
+    : String(value ?? '').split(/[,，]/);
+  return [...new Set(
+    list
+      .map((item) => String(item || '').trim().slice(0, 32))
+      .filter(Boolean),
+  )].slice(0, 12);
+}
+
 function normalizeEntryInput(input, hostOverride = '') {
   const rawHostInput = String(input.host || hostOverride || '').trim();
   const parsedHost = parseHttpUrl(rawHostInput);
@@ -891,10 +902,28 @@ function normalizeEntryInput(input, hostOverride = '') {
 
   const rawTotp = String(input.totpSecret ?? '').trim();
   let totpSecret = '';
+  let totpDigits = 6;
+  let totpPeriod = 30;
+  let totpAlgorithm = 'SHA1';
   if (rawTotp) {
-    if (!isValidTotpSecret(rawTotp)) throw new Error('TOTP 密钥不是有效的 Base32');
-    totpSecret = normalizeTotpSecret(rawTotp);
-    if (totpSecret.length > LIMITS.totp) throw new Error('TOTP 密钥过长');
+    const parsedOtp = parseOtpAuthUri(rawTotp);
+    const candidate = parsedOtp?.secret || rawTotp;
+    if (!isValidTotpSecret(candidate)) throw new Error('TOTP secret must be valid Base32');
+    totpSecret = normalizeTotpSecret(candidate);
+    if (totpSecret.length > LIMITS.totp) throw new Error('TOTP secret is too long');
+    if (parsedOtp) {
+      totpDigits = parsedOtp.digits;
+      totpPeriod = parsedOtp.period;
+      totpAlgorithm = parsedOtp.algorithm;
+    } else {
+      totpDigits = Number(input.totpDigits) === 8 ? 8 : 6;
+      totpPeriod = Math.min(300, Math.max(10, Number(input.totpPeriod) || 30));
+      totpAlgorithm = ['SHA1', 'SHA256', 'SHA512'].includes(
+        String(input.totpAlgorithm || '').toUpperCase(),
+      )
+        ? String(input.totpAlgorithm).toUpperCase()
+        : 'SHA1';
+    }
   }
 
   const parsedUrl = parseHttpUrl(input.url || '') || parsedHost;
@@ -910,6 +939,12 @@ function normalizeEntryInput(input, hostOverride = '') {
     notes: clampText(input.notes, LIMITS.notes),
     url,
     totpSecret,
+    totpDigits,
+    totpPeriod,
+    totpAlgorithm,
+    favorite: Boolean(input.favorite),
+    tags: normalizeTags(input.tags),
+    folder: clampText(input.folder, 80).trim(),
   };
 }
 
@@ -928,6 +963,9 @@ function safeEntry(entry) {
     source: entry.source || '',
     hasPassword: Boolean(entry.password),
     hasTotp: Boolean(entry.totpSecret),
+    favorite: Boolean(entry.favorite),
+    tags: Array.isArray(entry.tags) ? entry.tags : [],
+    folder: entry.folder || '',
     historyCount: Array.isArray(entry.history) ? entry.history.length : 0,
   };
 }
@@ -1011,6 +1049,9 @@ async function upsertCredential(input, hostOverride) {
     if (input.title) covering.title = normalized.title;
     if (input.notes) covering.notes = normalized.notes;
     if (input.url) covering.url = normalized.url;
+    if (input.favorite !== undefined) covering.favorite = Boolean(input.favorite);
+    if (input.tags !== undefined) covering.tags = normalizeTags(input.tags);
+    if (input.folder !== undefined) covering.folder = clampText(input.folder, 80).trim();
     if (input.totpSecret !== undefined) covering.totpSecret = normalized.totpSecret;
     covering.updatedAt = now;
     covering.source = input.source || covering.source || 'manual';
@@ -1663,7 +1704,14 @@ async function handleMessage(message, sender) {
         }),
         isolated: isHostIsolated(host, isolated),
         policy: sitePolicyFor(host),
-        matches: findEntriesForHost(host, port).map(safeEntry),
+        matches: findEntriesForHost(host, port)
+          .map(safeEntry)
+          .sort(
+            (a, b) =>
+              Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)) ||
+              (b.lastUsedAt || 0) - (a.lastUsedAt || 0) ||
+              (a.username || '').localeCompare(b.username || ''),
+          ),
       };
     }
 
@@ -1682,10 +1730,24 @@ async function handleMessage(message, sender) {
       }
       entry.lastUsedAt = Date.now();
       await saveVault();
+      let totpCode = '';
+      if (entry.totpSecret) {
+        try {
+          const totp = await generateTotp(entry.totpSecret, {
+            digits: entry.totpDigits,
+            period: entry.totpPeriod,
+            algorithm: entry.totpAlgorithm,
+          });
+          totpCode = totp.code;
+        } catch {
+          /* a malformed legacy secret should not block password fill */
+        }
+      }
       return {
         username: entry.username || '',
         password: entry.password,
         title: entry.title,
+        totpCode,
       };
     }
 
@@ -1917,6 +1979,7 @@ async function handleMessage(message, sender) {
         info.reused = (counts.get(entry.password) || 0) > 1;
         info.ageDays = Math.max(0, Math.floor((now - entryTime(entry)) / 86_400_000));
         info.old = info.ageDays > 365;
+        info.http = /^http:\/\//i.test(entry.url || '');
         return info;
       });
       return {
@@ -1927,6 +1990,8 @@ async function handleMessage(message, sender) {
           weak: entries.filter((entry) => entry.weak).length,
           reused: entries.filter((entry) => entry.reused).length,
           old: entries.filter((entry) => entry.old).length,
+          http: entries.filter((entry) => entry.http).length,
+          favorite: entries.filter((entry) => entry.favorite).length,
           updatedAt: s.data.updatedAt || 0,
         },
       };
@@ -1948,8 +2013,57 @@ async function handleMessage(message, sender) {
         url: entry.url || '',
         passwordChangedAt: entryTime(entry),
         totpSecret: entry.totpSecret || '',
+        totpDigits: entry.totpDigits || 6,
+        totpPeriod: entry.totpPeriod || 30,
+        totpAlgorithm: entry.totpAlgorithm || 'SHA1',
+        favorite: Boolean(entry.favorite),
+        tags: Array.isArray(entry.tags) ? entry.tags : [],
+        folder: entry.folder || '',
         historyCount: Array.isArray(entry.history) ? entry.history.length : 0,
       };
+    }
+
+    case 'SV_TOGGLE_FAVORITE': {
+      if (!isExtensionPage(sender)) throw new Error('Only extension pages may change favorites');
+      return enqueue(async () => {
+        const s = await requireUnlocked();
+        const entry = s.data.entries.find((item) => item.id === message.id);
+        if (!entry) throw new Error('Entry not found');
+        entry.favorite = !entry.favorite;
+        entry.updatedAt = Date.now();
+        await saveVault();
+        return { favorite: entry.favorite };
+      });
+    }
+
+    case 'SV_BULK_UPDATE': {
+      if (!isExtensionPage(sender)) throw new Error('Only extension pages may update entries');
+      return enqueue(async () => {
+        const s = await requireUnlocked();
+        const ids = new Set(Array.isArray(message.ids) ? message.ids : []);
+        let updated = 0;
+        for (const entry of s.data.entries) {
+          if (!ids.has(entry.id)) continue;
+          entry.favorite = Boolean(message.favorite);
+          entry.updatedAt = Date.now();
+          updated += 1;
+        }
+        if (updated) await saveVault();
+        return { updated };
+      });
+    }
+
+    case 'SV_BULK_DELETE': {
+      if (!isExtensionPage(sender)) throw new Error('Only extension pages may delete entries');
+      return enqueue(async () => {
+        const s = await requireUnlocked();
+        const ids = new Set(Array.isArray(message.ids) ? message.ids : []);
+        const before = s.data.entries.length;
+        s.data.entries = s.data.entries.filter((entry) => !ids.has(entry.id));
+        const deleted = before - s.data.entries.length;
+        if (deleted) await saveVault();
+        return { deleted };
+      });
     }
 
     case 'SV_GET_TOTP_CODE': {
@@ -1958,7 +2072,11 @@ async function handleMessage(message, sender) {
       const entry = findEntry(message.id);
       if (!entry) throw new Error('账号不存在');
       if (!entry.totpSecret) throw new Error('该账号没有配置 TOTP');
-      const result = await generateTotp(entry.totpSecret);
+      const result = await generateTotp(entry.totpSecret, {
+        digits: entry.totpDigits,
+        period: entry.totpPeriod,
+        algorithm: entry.totpAlgorithm,
+      });
       return {
         ...result,
         title: entry.title,
@@ -2083,6 +2201,67 @@ async function handleMessage(message, sender) {
         hasTimestamps: parsed.hasTimestamps,
         timeBasis: parsed.hasTimestamps ? 'file' : 'fileModified',
       };
+    }
+
+    case 'SV_PREVIEW_IMPORT_ROWS': {
+      if (!isExtensionPage(sender)) throw new Error('Only extension pages may import');
+      await requireUnlocked();
+      const rows = Array.isArray(message.entries) ? message.entries : [];
+      if (rows.length === 0) {
+        return {
+          imported: 0,
+          updated: 0,
+          merged: 0,
+          skipped: Number(message.skipped) || 0,
+          total: Number(message.total) || 0,
+          format: String(message.format || 'Import'),
+          warnings: ['No importable login rows'],
+          hasTimestamps: false,
+          timeBasis: 'file',
+          conflicts: [],
+          conflictCount: 0,
+        };
+      }
+      const preview = await previewImported(rows);
+      return {
+        ...preview,
+        skipped: (Number(message.skipped) || 0) + (preview.skipped || 0),
+        total: Number(message.total) || rows.length,
+        format: String(message.format || 'Import'),
+        warnings: Array.isArray(message.warnings) ? message.warnings : [],
+        hasTimestamps: rows.some((row) => Number(row.passwordChangedAt) > 0),
+        timeBasis: rows.some((row) => Number(row.passwordChangedAt) > 0) ? 'file' : 'fileModified',
+      };
+    }
+
+    case 'SV_IMPORT_ROWS': {
+      if (!isExtensionPage(sender)) throw new Error('Only extension pages may import');
+      await requireUnlocked();
+      const rows = Array.isArray(message.entries) ? message.entries : [];
+      if (rows.length === 0) {
+        return {
+          imported: 0,
+          updated: 0,
+          merged: 0,
+          skipped: Number(message.skipped) || 0,
+          total: Number(message.total) || 0,
+          format: String(message.format || 'Import'),
+          warnings: ['No importable login rows'],
+          hasTimestamps: false,
+          timeBasis: 'file',
+        };
+      }
+      return enqueue(async () => {
+        const result = await mergeImported(rows, `import:${message.format || 'file'}`);
+        return {
+          ...result,
+          total: Number(message.total) || rows.length,
+          format: String(message.format || 'Import'),
+          warnings: Array.isArray(message.warnings) ? message.warnings : [],
+          hasTimestamps: rows.some((row) => Number(row.passwordChangedAt) > 0),
+          timeBasis: rows.some((row) => Number(row.passwordChangedAt) > 0) ? 'file' : 'fileModified',
+        };
+      });
     }
 
     case 'SV_IMPORT_CSV': {
@@ -2354,6 +2533,22 @@ async function handleMessage(message, sender) {
       }
       const saved = await saveSettings(next);
       touchSession();
+      try {
+        if (chrome.tabs?.query) {
+          const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+          await Promise.allSettled(
+            tabs.map((tab) =>
+              tab.id
+                ? chrome.tabs
+                    .sendMessage(tab.id, { type: 'SV_SETTINGS_CHANGED', settings: saved })
+                    .catch(() => {})
+                : Promise.resolve(),
+            ),
+          );
+        }
+      } catch {
+        /* tabs may be unavailable */
+      }
       return { settings: saved };
     }
 

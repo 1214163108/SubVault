@@ -1,5 +1,6 @@
 """Package the loadable extension into dist/subvault-<version>.zip."""
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -39,6 +40,10 @@ def main() -> None:
             archive.write(ROOT / relative, relative.as_posix())
 
     print(f"wrote {target} ({target.stat().st_size:,} bytes, {len(files)} files)")
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    checksum = target.with_suffix(target.suffix + ".sha256")
+    checksum.write_text(f"{digest}  {target.name}\n", encoding="utf-8")
+    print(f"sha256 {digest}")
     for relative in sorted(files):
         print(f"  {relative.as_posix()}")
 

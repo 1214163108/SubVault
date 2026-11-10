@@ -338,4 +338,32 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
   assert.equal(wrong.ok, false);
   const unlocked = await send({ type: 'SV_UNLOCK', password: 'correct horse battery staple' });
   assert.equal(unlocked.ok, true);
+
+  const metaEntry = await send({
+    type: 'SV_ADD_ENTRY',
+    entry: {
+      host: 'favorite.example.com',
+      username: 'favorite-user',
+      password: 'favorite-password',
+      favorite: true,
+      folder: 'Work',
+      tags: ['finance', '常用'],
+    },
+  });
+  assert.equal(metaEntry.ok, true);
+  const listedMeta = await send({ type: 'SV_LIST_ENTRIES' });
+  const favorite = listedMeta.entries.find((entry) => entry.id === metaEntry.id);
+  assert.equal(favorite.favorite, true);
+  assert.equal(favorite.folder, 'Work');
+  assert.deepEqual(favorite.tags, ['finance', '常用']);
+  const toggled = await send({ type: 'SV_TOGGLE_FAVORITE', id: metaEntry.id });
+  assert.equal(toggled.favorite, false);
+  const bulkFavorite = await send({
+    type: 'SV_BULK_UPDATE',
+    ids: [metaEntry.id],
+    favorite: true,
+  });
+  assert.equal(bulkFavorite.updated, 1);
+  const bulkDeleted = await send({ type: 'SV_BULK_DELETE', ids: [metaEntry.id] });
+  assert.equal(bulkDeleted.deleted, 1);
 });

@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +23,10 @@ def main() -> None:
                 raise SystemExit(f"missing host file: {path}")
             archive.write(path, arcname=name)
     print(f"wrote {OUT} ({OUT.stat().st_size:,} bytes)")
+    digest = hashlib.sha256(OUT.read_bytes()).hexdigest()
+    checksum = OUT.with_suffix(OUT.suffix + ".sha256")
+    checksum.write_text(f"{digest}  {OUT.name}\n", encoding="utf-8")
+    print(f"sha256 {digest}")
 
 
 if __name__ == "__main__":

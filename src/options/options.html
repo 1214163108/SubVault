@@ -72,6 +72,7 @@
             <div class="stat warn"><strong id="statWeak">0</strong><span>弱密码</span></div>
             <div class="stat warn"><strong id="statReused">0</strong><span>重复使用</span></div>
             <div class="stat warn"><strong id="statOld">0</strong><span>超过 1 年</span></div>
+            <div class="stat warn"><strong id="statHttp">0</strong><span>HTTP 明文</span></div>
           </div>
 
           <div class="toolbar">
@@ -83,12 +84,16 @@
             </div>
             <select id="filterSelect" aria-label="筛选">
               <option value="all">全部账号</option>
+              <option value="favorite">收藏</option>
+              <option value="recent">最近使用</option>
               <option value="weak">弱密码</option>
               <option value="reused">重复使用</option>
               <option value="old">超过 1 年</option>
+              <option value="http">HTTP 明文</option>
             </select>
             <select id="sortSelect" aria-label="排序">
               <option value="host">按网站</option>
+              <option value="recent">最近使用</option>
               <option value="updated">最近更新</option>
               <option value="changed">记录时间</option>
             </select>
@@ -96,6 +101,14 @@
           </div>
 
           <div id="duplicatesPanel" class="result" hidden></div>
+
+          <div id="bulkBar" class="bulk-bar" hidden>
+            <span id="bulkCount">已选 0 项</span>
+            <button id="bulkFavoriteBtn" class="btn subtle" type="button">收藏</button>
+            <button id="bulkUnfavoriteBtn" class="btn subtle" type="button">取消收藏</button>
+            <button id="bulkDeleteBtn" class="btn danger" type="button">删除</button>
+            <button id="bulkClearBtn" class="link-btn" type="button">清除选择</button>
+          </div>
 
           <div id="vaultList" class="vault-list"></div>
           <div id="vaultEmpty" class="empty" hidden>
@@ -112,20 +125,20 @@
           <div class="card">
             <div class="card-head">
               <div>
-                <h2>导入浏览器密码</h2>
-                <p>支持 Chrome / Edge / Firefox / Bitwarden / LastPass / 1Password 导出的 CSV。</p>
+                <h2>导入密码</h2>
+                <p>支持 Chrome / Edge / Firefox / Bitwarden / LastPass / 1Password 导出的 CSV，以及 Bitwarden 未加密 JSON、1Password 1PUX。</p>
               </div>
-              <span class="tag">CSV</span>
+              <span class="tag">CSV · JSON · 1PUX</span>
             </div>
             <ol class="steps">
-              <li>在 Chrome 打开 <code>chrome://password-manager/settings</code>，选择“导出密码”。</li>
-              <li>把导出的 CSV 文件拖到下方，或点击选择文件。</li>
-              <li>导入后建议删除 CSV 文件，因为它是明文。</li>
+              <li>在浏览器或密码管理器中导出 CSV / JSON / 1PUX 文件。</li>
+              <li>把文件拖到下方，或点击选择文件。</li>
+              <li>导入后建议删除明文导出文件；SubVault 会先下载导入前加密快照。</li>
             </ol>
             <div id="dropZone" class="dropzone">
-              <input id="csvFile" type="file" accept=".csv,text/csv" hidden />
-              <button id="chooseCsvBtn" class="btn primary" type="button">选择 CSV 文件</button>
-              <p>或把文件拖到这里</p>
+              <input id="csvFile" type="file" accept=".csv,.json,.1pux,text/csv,application/json" hidden />
+              <button id="chooseCsvBtn" class="btn primary" type="button">选择导入文件</button>
+              <p>支持 CSV / Bitwarden JSON / 1PUX，或把文件拖到这里</p>
             </div>
             <div id="importPreview" class="result preview" hidden></div>
             <div id="importResult" class="result" hidden></div>
@@ -155,6 +168,11 @@
               <input id="backupFile" type="file" accept=".json,application/json" hidden />
             </div>
             <div id="backupFileName" class="file-name" hidden></div>
+            <div id="backupHealth" class="status-box">最近备份：尚未记录</div>
+            <div class="button-row">
+              <button id="recoveryKitBtn" class="btn" type="button">下载恢复说明</button>
+              <button id="verifyBackupBtn" class="btn" type="button">校验所选备份结构</button>
+            </div>
             <div class="form-grid two backup-options">
               <label class="field">
                 <span>恢复方式</span>
@@ -644,10 +662,29 @@
           <span>备注（可选）</span>
           <textarea id="entryNotes" rows="3" placeholder="只保存在本机"></textarea>
         </label>
-        <label class="field">
-          <span>TOTP 密钥（可选，Base32）</span>
-          <input id="entryTotp" type="text" autocomplete="off" placeholder="例如 JBSWY3DPEHPK3PXP" />
+        <div class="form-grid two">
+          <label class="field">
+            <span>文件夹（可选）</span>
+            <input id="entryFolder" type="text" autocomplete="off" placeholder="例如 工作 / 个人" />
+          </label>
+          <label class="field">
+            <span>标签（可选，逗号分隔）</span>
+            <input id="entryTags" type="text" autocomplete="off" placeholder="例如 财务, 常用" />
+          </label>
+        </div>
+        <label class="check">
+          <input id="entryFavorite" type="checkbox" />
+          <span>收藏此账号（列表中优先显示）</span>
         </label>
+        <label class="field">
+          <span>TOTP 密钥、otpauth 链接或二维码</span>
+          <input id="entryTotp" type="text" autocomplete="off" placeholder="Base32 或 otpauth://totp/..." />
+        </label>
+        <div class="button-row">
+          <button id="entryTotpQrBtn" class="btn subtle" type="button">从二维码图片导入</button>
+          <input id="entryTotpQrFile" type="file" accept="image/*" hidden />
+          <span id="entryTotpHint" class="muted-text"></span>
+        </div>
         <p id="entryError" class="form-error" hidden></p>
       </div>
       <div class="dialog-actions">

@@ -4,7 +4,7 @@
 
 一个只在本机运行的 Chromium 密码管理器扩展（Manifest V3）。它按可控的“主域 / 子域”规则保存和填充网页登录密码，支持导入浏览器导出的密码 CSV，并提供完整的本地密码库管理。
 
-当前扩展版本：**v1.3.2**（本机同步宿主包保持 **v1.0.0**，功能未变更）。
+当前扩展版本：**v1.4.0**（本机同步宿主包保持 **v1.0.0**，功能未变更）。
 
 - 默认规则：同一主域下的所有子域共享账号（`mail.example.com` ↔ `drive.example.com`）。
 - 独立规则：把主域加入“独立主域名”列表后，该主域下每个子域都作为全新域名单独保存、单独匹配。
@@ -13,11 +13,14 @@
 - 记录密码时间：每条密码都有“记录时间”；导入时同一站点组、同一账号出现多个密码，按最新时间覆盖合并。
 - 接管 Chrome 自带密码管理器（有限）：标记登录框、检测并清除原生自动填充、使用 SubVault 自有浮层；支持用户名分步登录、iframe 登录和 SPA 登录框；可选关闭 Chrome 的“保存密码”提示。**Chrome 原生钥匙图标和原生密码下拉无法被扩展移除或替换。**
 - 站点例外：对个别网站关闭接管、保存提示或钥匙按钮。
-- 导入预演：导入前显示新增/更新/合并/冲突，确认后先自动下载加密快照再应用。
-- 备份：可包含设置、子域规则和站点例外；支持合并恢复或覆盖恢复；明文 CSV 导出需要再次验证主密码。
+- 导入：支持 Chrome / Edge / Firefox / Bitwarden / LastPass / 1Password 的 CSV，以及 Bitwarden 未加密 JSON、1Password 1PUX；导入前预演新增/更新/合并/冲突。
+- 备份与恢复：导出 AES-256-GCM 加密备份时同时生成 SHA-256 校验文件；显示最近备份时间、超过 30 天提醒；可下载恢复说明，明确本地密码库无法绕过主密码恢复。
+- 组织管理：收藏、文件夹、标签、最近使用排序、批量收藏/删除；支持弱密码/重复/超龄/HTTP 明文筛选。
+- TOTP：支持 Base32、`otpauth://totp/...`、二维码图片导入；选择账号填充时自动填写当前 OTP 字段。
 - 工具栏角标：显示当前标签页匹配到的已保存账号数量；锁定状态显示锁标记。
 - 材质外观：支持经典纯色、磨砂玻璃、液态玻璃，可配合浅色/深色主题使用。
-- 密码管理：搜索、筛选、弱密码/重复使用/超龄检查、重复账号检测合并、显示/复制、编辑、删除、生成强密码、TOTP 动态码、密码历史回滚、主密码加密备份或独立密码备份。
+- 密码管理：搜索、筛选、弱密码/重复使用/超龄检查、HTTP 明文提示、重复账号检测合并、显示/复制、编辑、删除、生成强密码、TOTP 动态码、密码历史回滚、主密码加密备份或独立密码备份。
+- 安全说明：见 [SECURITY.md](SECURITY.md)；当前版本未经过独立第三方安全审计。
 - 存储自检：设置页显示扩展本地存储占用、密码库条目数和配额，写入失败时给出清理建议。
 - 本机跨浏览器同步：可选安装 Native Messaging 宿主，让 Chrome / Edge / Brave 共用同一套加密密码库；B 首次安装会提示导入，不会先创建临时密码库。
 
@@ -96,7 +99,7 @@ PSL 的边界：
 
 ### 从 zip 加载
 
-解压 `dist/subvault-1.3.2.zip`，按上面的步骤加载解压后的目录。
+解压 `dist/subvault-1.4.0.zip`，按上面的步骤加载解压后的目录。
 
 > 需要 Chromium 111+（`chrome.storage.session`、`chrome.privacy`、CSS `color-mix` 等）。
 
@@ -253,13 +256,20 @@ Remove-Item -LiteralPath "D:\SubVaultSyncHost" -Recurse -Force
 - LastPass：`url,username,password,extra,name,...`
 - 1Password：`Title,Url,Username,Password,...`
 
+### Bitwarden JSON / 1Password 1PUX
+
+- Bitwarden：导出**未加密 JSON**，选择文件后自动导入登录项、URI、TOTP、文件夹和标签。
+- 1Password：导出 `.1pux`，SubVault 会解压 `export.data`，读取登录字段、URL、TOTP、文件夹和标签。
+- 加密的 Bitwarden JSON 会提示先导出未加密版本。
+- 两种格式都会进入同一套导入预演、时间合并和导入前加密快照流程。
+
 ### 时间从哪来
 
 - Firefox 等带时间列的导出：优先读取 `timePasswordChanged`、`passwordChangedAt`、`updatedAt`、`timeCreated`、`timeLastUsed`。
 - Chrome / Edge 的 CSV **没有时间列**：使用文件的修改时间（`File.lastModified`）作为记录时间。复制文件可能改变这个时间，重要合并前建议先核对。
 - 支持秒、毫秒、微秒时间戳和常见日期字符串。
 
-> CSV 导出是明文；需要长期备份请使用“加密备份”。
+> CSV / JSON / 1PUX 导出都是明文或可解密导出文件；需要长期备份请使用“加密备份”。
 
 ---
 
@@ -399,8 +409,12 @@ node tests/csv.test.js
 node tests/merge.test.js
 node tests/crypto-generator.test.js
 node tests/totp.test.js
+node tests/importers.test.js
 node tests/legacy-vault.test.js
 node tests/backend.test.js
+
+# Bitwarden JSON 导入 UI
+node tools/test-import-e2e.mjs
 
 # 本机同步宿主协议与跨浏览器同步
 node tools/test-native-host.mjs
@@ -442,11 +456,12 @@ pnpm exec playwright test
 E2E 覆盖：加载未打包扩展 → 创建密码库 → 通过设置页添加账号 → 打开本地登录页 → 通过内容脚本填充用户名和密码。  
 仓库中的 `tools/playwright-smoke.mjs` 已用 Playwright API + Chromium 实际跑通；官方 `playwright test` CLI 在当前环境会卡在 worker 启动，因此没有把它当作已验证结果。
 
-后端集成测试使用 Node 中的 `chrome` API mock，覆盖：创建密码库、默认主域共享、独立主域隔离、CSV 导入预演与时间合并、独立密码备份/覆盖恢复、站点例外、重复账号合并、localhost 端口隔离、TOTP、密码历史、锁定/解锁。当前共 30 个 Node 测试通过。
+后端集成测试使用 Node 中的 `chrome` API mock，覆盖：创建密码库、默认主域共享、独立主域隔离、CSV 导入预演与时间合并、Bitwarden JSON / 1PUX 解析、独立密码备份/覆盖恢复、站点例外、重复账号合并、localhost 端口隔离、TOTP、收藏标签、密码历史、锁定/解锁。当前共 33 个 Node 测试通过。
 
 Playwright Chromium API E2E 已通过：
 - `tools/playwright-smoke.mjs`：创建密码库、添加账号、真实登录页填充；
 - `tools/test-popover-e2e.mjs`：用户名/密码框锚定、重复点击稳定性、搜索/键盘、自动弹出、iframe、open shadow DOM、用户名分步登录；
+- `tools/test-import-e2e.mjs`：通过设置页导入 Bitwarden JSON，确认账号、文件夹和 TOTP 元数据写入；
 - `tools/test-sync-e2e.mjs`：A 上传、B 首次导入、A 后续修改实时到达 B。
 
 官方 `playwright test` CLI 在当前环境会卡在 worker 启动，因此没有把它当作已验证结果；`tests/e2e/extension.spec.js` 仍保留给可正常运行 Playwright Test 的环境。
@@ -456,7 +471,7 @@ Playwright Chromium API E2E 已通过：
 - `tools/test-sync-e2e.mjs`：浏览器 A 创建并上传，浏览器 B 首次导入，A 后续修改实时到达 B；并模拟 B 的 service worker 重启后补拉漏掉的修改。
 
 填充 UI 另外有：
-- `tools/test-popover-e2e.mjs`：真实 Chromium 加载扩展，验证账号框锚定、密码框不显示按钮、输入框实时过滤/空输入显示全部、自动弹出、键盘、iframe、open shadow DOM、用户名分步登录，以及窗口缩放后仍能打开并选择账号；同时校验工具栏角标、账号主标题 Toast、居中位置、深色主题和液态玻璃材质。
+- `tools/test-popover-e2e.mjs`：真实 Chromium 加载扩展，验证账号框锚定、密码框不显示按钮、输入框实时过滤/空输入显示全部、自动弹出、键盘、iframe、open shadow DOM、用户名分步登录，以及窗口缩放后仍能打开并选择账号；同时校验工具栏角标、账号主标题 Toast、居中位置、深色主题、液态玻璃材质和 OTP 自动填充。
 - `tools/test-save-prompt-e2e.mjs`：验证输入/点击输入框不弹提示；点击登录按钮或密码框 Enter 后出现保存提示，已有账号改密后出现更新提示；覆盖 SPA 常见按钮、`<span>登 录</span>`、多 iframe 下只弹一个提示、iframe 内登录由顶层页面显示提示，以及左上/右下/居中提示和 800×500 窗口自适应；校验账号主标题、保存/更新动作 kicker 和详细 Toast。
 - `tools/test-lock-config-e2e.mjs`：验证 1/5 分钟锁定 alarm 的时间、关闭自动锁定会清除 alarm、关闭后保持 65 秒不自动锁定，以及手动锁定立即生效。
 - `tools/test-copy-e2e.mjs`：实际打开 popup 并点击密码复制按钮，验证 clipboard 内容和“密码已复制”toast；同时验证 popup/设置页主题、材质、锁定 popup 高度。
@@ -467,7 +482,7 @@ Playwright Chromium API E2E 已通过：
 
 ## 十一、已知限制
 
-- Chrome 扩展错误页在“重新加载扩展”后不会自动清空历史错误。若源码已经是 v1.3.2（popup 中没有 `copyPassword` 标识），但错误页仍显示旧的 `copyPassword is not a function`，点击错误页右上角“全部清除”，再关闭并重新打开 popup 即可。错误页的源码预览会读取当前文件，因此可能出现“旧错误文字 + 新代码”的现象。
+- Chrome 扩展错误页在“重新加载扩展”后不会自动清空历史错误。若源码已经是 v1.4.0（popup 中没有 `copyPassword` 标识），但错误页仍显示旧的 `copyPassword is not a function`，点击错误页右上角“全部清除”，再关闭并重新打开 popup 即可。错误页的源码预览会读取当前文件，因此可能出现“旧错误文字 + 新代码”的现象。
 
 - 登录框位于跨域 iframe 时已尝试注入，但不同站点的框架结构和 CSP 差异较大，仍可能出现无法识别的情况。
 - 用户名分步登录已支持只填用户名；如果站点使用完全自定义的 canvas/非 input 登录框，扩展无法填充。
@@ -487,7 +502,8 @@ Playwright Chromium API E2E 已通过：
 
 ## 十二、版本记录
 
-- **v1.3.2**：补齐测试环境兼容守卫，自动锁定 timer 不再阻止 Node 测试进程退出；30/30 单元测试通过。
+- **v1.4.0**：补齐 P0 实用功能：TOTP 二维码/otpauth 导入与 OTP 自动填充；Bitwarden 未加密 JSON、1Password 1PUX 导入；收藏、标签、文件夹、最近使用、HTTP 明文筛选；加密备份 SHA-256 校验、恢复说明和备份提醒；新增 `SECURITY.md` 与发布校验文件。
+- **v1.3.2**：提示视觉层级和材质外观；测试环境兼容与单元测试稳定性修复。
 - **v1.3.1**：popup 保存提示也改为账号主标题、动作/站点副标题，统一全部提示的信息层级。
 - **v1.3.0**：提示视觉层级统一（账号为主标题、动作/站点为副标题）；新增经典纯色/磨砂玻璃/液态玻璃材质；账号提示、保存/更新提示和扩展页面统一使用材质与主题。
 - **v1.2.0**：账号填入/保存/更新等所有页面提示跟随位置配置；提示文案显示账号名、站点，并区分新增/更新；新增主题外观（跟随系统/浅色/深色），统一应用到扩展页面、popup 和网页提示。

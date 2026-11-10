@@ -10,13 +10,19 @@ fs.mkdirSync(syncDir, { recursive: true });
 
 const form = `
   <form id="login">
-    <label>用户名 <input name="username" autocomplete="username" /></label>
-    <label>密码 <input name="password" type="password" autocomplete="current-password" /></label>
-    <button type="submit">登录</button>
+    <label>鐢ㄦ埛鍚?<input name="username" autocomplete="username" /></label>
+    <label>瀵嗙爜 <input name="password" type="password" autocomplete="current-password" /></label>
+    <button type="submit">鐧诲綍</button>
   </form>`;
 
 const pages = {
   '/normal': `<!doctype html><html><body>${form}</body></html>`,
+  '/otp': `<!doctype html><html><body><form>
+    <input name="username" autocomplete="username" />
+    <input name="password" type="password" autocomplete="current-password" />
+    <input name="otp" autocomplete="one-time-code" inputmode="numeric" />
+    <button type="submit">鐧诲綍</button>
+  </form></body></html>`,
   '/iframe': `<!doctype html><html><body><iframe id="frame" src="/normal?iframe=1" style="width:500px;height:300px"></iframe></body></html>`,
   '/shadow': `<!doctype html><html><body><div id="shadow-host"></div><script>
     const root = document.getElementById('shadow-host').attachShadow({ mode: 'open' });
@@ -24,7 +30,7 @@ const pages = {
   </script></body></html>`,
   '/username': `<!doctype html><html><body><form>
     <input name="username" autocomplete="username" />
-    <button type="button">下一步</button>
+    <button type="button">涓嬩竴姝?/button>
   </form></body></html>`,
 };
 
@@ -75,6 +81,7 @@ try {
         title: 'Popover account',
         username: 'alice',
         password: 'secret-value',
+        totpSecret: 'JBSWY3DPEHPK3PXP',
       },
     }),
   );
@@ -137,8 +144,9 @@ try {
   }
   await normal.locator('input[name="username"]').fill('ali');
   await normal.waitForTimeout(200);
-  if ((await normalPopover.locator('[data-subvault-account]').count()) !== 1) {
-    throw new Error('popover did not filter from the account input');
+  const filteredCount = await normalPopover.locator('[data-subvault-account]').count();
+  if (filteredCount !== 1) {
+    throw new Error(`popover did not filter from the account input: ${filteredCount}`);
   }
   await normal.keyboard.press('Enter');
   await normal.waitForTimeout(300);
@@ -164,7 +172,7 @@ try {
   }
   await usernameAnchorPage.screenshot({ path: path.join(root, 'docs', 'popover-username.png') });
   await usernameAnchorTrigger.click();
-  await usernameAnchorPage.locator('[data-subvault-account]').first().click();
+  await usernameAnchorPage.locator('[data-subvault-account]').filter({ hasText: 'alice' }).first().click();
   await usernameAnchorPage.waitForTimeout(300);
   const usernameAnchorValues = await usernameAnchorPage.evaluate(() => ({
     username: document.querySelector('input[name="username"]')?.value,
@@ -184,7 +192,7 @@ try {
   const compactPopover = await openPopover(compactPage);
   await compactPage.setViewportSize({ width: 760, height: 460 });
   await compactPage.waitForTimeout(500);
-  await compactPopover.locator('[data-subvault-account]').first().click();
+  await compactPopover.locator('[data-subvault-account]').filter({ hasText: 'alice' }).first().click();
   await compactPage.waitForTimeout(300);
   const compactValues = await compactPage.evaluate(() => ({
     username: document.querySelector('input[name="username"]')?.value,
@@ -213,7 +221,7 @@ try {
   const frame = iframePage.frames().find((item) => item.url().includes('/normal?iframe=1'));
   if (!frame) throw new Error('iframe frame not found');
   const iframePopover = await openPopover(frame);
-  await iframePopover.locator('[data-subvault-account]').first().click();
+  await iframePopover.locator('[data-subvault-account]').filter({ hasText: 'alice' }).first().click();
   await iframePage.waitForTimeout(300);
   const iframeValues = await frame.evaluate(() => ({
     username: document.querySelector('input[name="username"]')?.value,
@@ -226,7 +234,7 @@ try {
   const shadowPage = await context.newPage();
   await shadowPage.goto(`${base}/shadow`);
   const shadowPopover = await openPopover(shadowPage);
-  await shadowPopover.locator('[data-subvault-account]').first().click();
+  await shadowPopover.locator('[data-subvault-account]').filter({ hasText: 'alice' }).first().click();
   await shadowPage.waitForTimeout(300);
   const shadowValues = await shadowPage.evaluate(() => {
     const root = document.getElementById('shadow-host')?.shadowRoot;
@@ -247,7 +255,7 @@ try {
   const usernameTrigger = usernamePage.locator('[data-subvault-trigger]');
   await usernameTrigger.waitFor({ state: 'visible', timeout: 8000 });
   await usernameTrigger.click();
-  await usernamePage.locator('[data-subvault-account]').first().click();
+  await usernamePage.locator('[data-subvault-account]').filter({ hasText: 'alice' }).first().click();
   await usernamePage.waitForTimeout(300);
   const usernameOnly = await usernameInput.inputValue();
   if (usernameOnly !== 'alice') {
@@ -265,7 +273,7 @@ try {
   await autoPage.locator('input[name="username"]').click();
   const autoPopover = autoPage.locator('[data-subvault-popover]');
   await autoPopover.waitFor({ state: 'visible', timeout: 8000 });
-  await autoPage.locator('[data-subvault-account]').first().click();
+  await autoPage.locator('[data-subvault-account]').filter({ hasText: 'alice' }).first().click();
   await autoPage.waitForTimeout(300);
   const autoValues = await autoPage.evaluate(() => ({
     username: document.querySelector('input[name="username"]')?.value,
@@ -284,7 +292,7 @@ try {
   const appearancePage = await context.newPage();
   await appearancePage.goto(`${base}/normal`);
   const appearancePopover = await openPopover(appearancePage);
-  await appearancePopover.locator('[data-subvault-account]').first().click();
+  await appearancePopover.locator('[data-subvault-account]').filter({ hasText: 'alice' }).first().click();
   await appearancePage.waitForTimeout(300);
   const appearance = await appearancePage.evaluate(() => {
     const host = document.getElementById('subvault-ui-root');
@@ -336,6 +344,28 @@ try {
     throw new Error(`liquid material failed: ${JSON.stringify(material)}`);
   }
 
+  const otpPage = await context.newPage();
+  await otpPage.goto(`${base}/otp`);
+  const otpPopover = await openPopover(otpPage);
+  await otpPopover.locator('[data-subvault-account]').filter({ hasText: 'alice' }).first().click();
+  await otpPage.waitForTimeout(400);
+  const otpValues = await otpPage.evaluate(() => ({
+    username: document.querySelector('input[name="username"]')?.value,
+    password: document.querySelector('input[name="password"]')?.value,
+    otp: document.querySelector('input[name="otp"]')?.value,
+    toast:
+      document.getElementById('subvault-ui-root')?.shadowRoot?.querySelector('.sv-toast')
+        ?.textContent || '',
+  }));
+  if (
+    otpValues.username !== 'alice' ||
+    otpValues.password !== 'secret-value' ||
+    !/^\d{6}$/.test(otpValues.otp) ||
+    !otpValues.toast.includes('动态码')
+  ) {
+    throw new Error(`OTP autofill failed: ${JSON.stringify(otpValues)}`);
+  }
+
   console.log(
     JSON.stringify(
       {
@@ -351,6 +381,7 @@ try {
         usernameOnly,
         appearance,
         material,
+        otp: otpValues,
         autoOpen: autoValues,
       },
       null,
