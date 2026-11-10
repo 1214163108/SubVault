@@ -1,0 +1,74 @@
+{
+  "manifest_version": 3,
+  "name": "SubVault 子域名密码库",
+  "short_name": "SubVault",
+  "version": "1.3.2",
+  "description": "默认按主域名共享登录密码，可为指定主域开启子域名独立存储；支持导入浏览器导出的密码 CSV，数据仅加密保存在本机。",
+  "minimum_chrome_version": "111",
+  "permissions": [
+    "storage",
+    "alarms",
+    "activeTab",
+    "privacy",
+    "idle",
+    "nativeMessaging",
+    "clipboardWrite"
+  ],
+  "optional_permissions": [
+    "clipboardRead"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "SubVault",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "src/content/content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "commands": {
+    "fill-login": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "用当前网站保存的账号填充登录表单"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzIbz5gUH5Z8e1Sdq9FsdvZ/WR3iB4ludiX+ybvVsTO6lM8geWu5unXWxwFX9mNEe7jhdYIMnmRCPq3KaY+BkisgmUGXv4NVm2Vew1I9Dh2rXkvj2Or6m+gm4umL/dgTpatY3mucxeJGsVjCFlu9FPzp7RQ3jbeNefwRoW8ndukRrbHuDQQ4e8epTPgSAqoTeS/uAf4K0QNbfcZwyMVl2C9Mms0rKtXJ8lFou/vjdVjox5Rc8P+SHt2qUrR/5G1kStxN6gFEdq8eqZV9YodFEthUCtjwAvqOCprHlrtk0npLb/giG9wAgVedQUcWW9676on+LrFNEAtNDJNClPJZU4wIDAQAB"
+}

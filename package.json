@@ -1,0 +1,17 @@
+{
+  "name": "subvault-extension",
+  "version": "1.3.2",
+  "private": true,
+  "type": "module",
+  "description": "SubVault Chromium extension (local encrypted password manager)",
+  "scripts": {
+    "test": "node tests/domain.test.js && node tests/csv.test.js && node tests/merge.test.js && node tests/crypto-generator.test.js && node tests/totp.test.js && node tests/legacy-vault.test.js && node tests/backend.test.js",
+    "test:e2e": "playwright test",
+    "check": "node --check src/background/service-worker.js && node --check src/content/content.js && node --check src/lib/domain.js && node --check src/lib/csv.js && node --check src/lib/merge.js && node --check src/lib/totp.js && node --check src/popup/popup.js && node --check src/options/options.js",
+    "verify": "node tools/verify-manifest.mjs && node tools/check-dom.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.50.0",
+    "playwright": "1.50.0"
+  }
+}
