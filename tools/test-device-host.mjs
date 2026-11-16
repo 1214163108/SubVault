@@ -57,7 +57,12 @@ result.protectedOk = result.protected.ok === true && result.protected.exists ===
 result.status = await send({ type: 'device-status', vaultId: 'device-test' });
 result.statusExists = result.status.ok === true && result.status.exists === true;
 result.credentialStored = result.status.credentialId === 'test-credential-id';
-result.unlocked = await send({ type: 'device-unlock', vaultId: 'device-test' });
+result.legacyProtected = await send({ type: 'device-protect', vaultId: 'device-legacy', key, credentialId: '' });
+result.legacyStatus = await send({ type: 'device-status', vaultId: 'device-legacy' });
+result.legacyNeedsHello = result.legacyStatus.needsHello === true;
+result.legacyUnlock = await send({ type: 'device-unlock', vaultId: 'device-legacy' });
+result.legacyRejected = result.legacyUnlock.ok === false && result.legacyUnlock.needsHelloSetup === true;
+result.unlocked = await send({ type: 'device-unlock', vaultId: 'device-test', credentialId: 'test-credential-id' });
 result.unlockKeyMatches = result.unlocked.ok === true && result.unlocked.key === key;
 const other = await send({ type: 'device-status', vaultId: 'other-vault' });
 result.otherIsolated = other.ok === true && other.exists === false;

@@ -4,7 +4,7 @@
 
 一个只在本机运行的 Chromium 密码管理器扩展（Manifest V3）。它按可控的“主域 / 子域”规则保存和填充网页登录密码，支持导入浏览器导出的密码 CSV，并提供完整的本地密码库管理。
 
-当前扩展版本：**v2.3.0**（本机同步宿主包为 **v1.5.0**，支持多密码库隔离路径、Windows Hello + DPAPI 设备快速解锁与独立 WebDAV 备份）。
+当前扩展版本：**v2.3.1**（本机同步宿主包为 **v1.5.1**，支持多密码库隔离路径、Windows Hello + DPAPI 设备快速解锁与独立 WebDAV 备份）。
 
 - 默认规则：同一主域下的所有子域共享账号（`mail.example.com` ↔ `drive.example.com`）。
 - 独立规则：把主域加入“独立主域名”列表后，该主域下每个子域都作为全新域名单独保存、单独匹配。
@@ -28,7 +28,7 @@
 - 隐私遮罩：切换标签页或窗口失焦时立即遮住 popup/设置页内容，可在“通用 → 窗口失焦时自动隐藏内容”关闭；复制密码提示“30 秒后自动清除”。
 - 双语界面：可跟随 Chrome UI 语言，也可在设置中强制简体中文 / English（`_locales` + 本地字典，零网络）。
 - 可访问性：填充浮层提供 `aria-haspopup` / `aria-expanded` / `aria-activedescendant` 与 roving tabindex，键盘和屏幕阅读器可用。
-- Windows Hello 设备快速解锁：启用时创建平台认证器凭据，解锁时先做 Windows Hello 交互验证，再由宿主用 DPAPI 解保护本机 VaultKey；认证器不可用时回退 DPAPI，主密码始终可回退。
+- Windows Hello 设备快速解锁：启用时创建平台认证器凭据，解锁时先做 Windows Hello 交互验证，再由宿主用 DPAPI 解保护本机 VaultKey；没有可用认证器时无法启用设备快速解锁，主密码始终可回退。
 - WebDAV 独立备份：与“本机同步”完全分开，只做加密备份与恢复，不参与实时双向同步；恢复以 WebDAV 备份为准，覆盖当前库并要求重新解锁。
 - Passkey 记录：条目可保存 Passkey 的 credentialId、RP ID、账号与备注，随密码库加密和备份；扩展不能创建或使用 Passkey 私钥，界面会明确说明。
 - 一次性分享：`.svshare` 使用独立密码加密，过期时间参与 KDF 与 AAD；界面明确“未勾选条目不分享”，默认不勾选任何账号，可按名称/站点/用户名/标签筛选。
@@ -134,7 +134,7 @@ PSL 的边界：
 
 ### 从 zip 加载
 
-解压 `dist/subvault-2.3.0.zip`，按上面的步骤加载解压后的目录。
+解压 `dist/subvault-2.3.1.zip`，按上面的步骤加载解压后的目录。
 
 > 需要 Chromium 111+（`chrome.storage.session`、`chrome.privacy`、CSS `color-mix` 等）。
 
@@ -146,7 +146,7 @@ PSL 的边界：
 
 ### 安装宿主
 
-1. 解压 `dist/subvault-sync-host-1.2.0.zip`；
+1. 解压 `dist/subvault-sync-host-1.5.1.zip`；
 2. Windows：右键 `install-host.ps1` → 使用 PowerShell 运行，或执行：
 
 ```powershell
@@ -374,7 +374,7 @@ WebDAV 备份规则：
 ## 七、安全模型
 
 - **加密**：默认 Argon2id（64 MiB 内存、3 次迭代、并行度 1、32 字节随机盐，输出 256 位密钥）或 PBKDF2-HMAC-SHA512（310,000 次迭代、32 字节盐）。主密码派生的是 KEK，KEK 用 AES-256-GCM 包装随机 32 字节 VaultKey（格式 v4），条目再由 VaultKey 用 AES-256-GCM 加密，随机 96 位 IV。修改主密码或更换密钥文件只重包 VaultKey，不会重新加密整个密码库。旧版 SHA-256 / PBKDF2 密码库在解锁时会透明升级到当前 KDF 参数并迁移到 v4。
-- **设备快速解锁**：仅 Windows 同步宿主支持。启用时扩展通过 WebAuthn 平台认证器创建凭据（Windows Hello 交互验证），宿主用 `ProtectedData`（`DataProtectionScope.CurrentUser`）保护一份 32 字节 VaultKey，保存为数据目录下的 `device.json` / `device-<id>.json`，并记录 credentialId。解锁时先做平台认证器断言，再由宿主解保护；认证器不可用或绑定未带凭据时回退到 DPAPI（无交互）。扩展不保存主密码，宿主也不会以明文形式保存 VaultKey。绑定只对当前 Windows 用户和当前设备有效，不参与同步；主密码/密钥文件始终可用作回退。禁用绑定、删除密码库、回滚迁移格式或清空扩展时会尽力删除对应文件。
+- **设备快速解锁**：仅 Windows 同步宿主支持。启用时扩展通过 WebAuthn 平台认证器创建凭据（Windows Hello 交互验证），宿主用 `ProtectedData`（`DataProtectionScope.CurrentUser`）保护一份 32 字节 VaultKey，保存为数据目录下的 `device.json` / `device-<id>.json`，并记录 credentialId。解锁时先做平台认证器断言，再由宿主解保护；旧版本创建且未带凭据的绑定会被拒绝，必须在设置页重新启用，不能退化为无交互解锁。扩展不保存主密码，宿主也不会以明文形式保存 VaultKey。绑定只对当前 Windows 用户和当前设备有效，不参与同步；主密码/密钥文件始终可用作回退。禁用绑定、删除密码库、回滚迁移格式或清空扩展时会尽力删除对应文件。
 - **格式迁移与回滚**：迁移前会把原始密文写入本机 `vaultBackup:<密码库 ID>`，新格式先在内存中解包/解密验证通过后才覆盖；迁移失败不会改动原密码库。设置页“密码库格式”卡片显示当前版本与备份时间，可输入主密码回滚；回滚后密码库回到旧格式并锁定，下一次解锁会重新迁移。迁移备份随密码库一起加密保存，不参与同步，也不会上传。
 - **为什么默认 Argon2id**：Argon2id 抗 GPU/ASIC 暴力破解能力更强。WASM 模块（hash-wasm 4.12.0，MIT）直接打包在扩展内，`manifest.json` 仅放行 `'wasm-unsafe-eval'`，CSP 仍为 `connect-src 'none'`；不下载远程代码。可在设置中切回纯 WebCrypto 的 PBKDF2。
 - **存储**：
@@ -655,7 +655,7 @@ Playwright Chromium API E2E 已通过：
 - 自动填充只处理登录表单；注册页会在密码框旁提供“生成强密码”芯片并在提交后提示保存，但不会把已有账号自动填进注册表单。
 - Chrome 扩展无法创建或使用 Passkey 私钥；Passkey 功能只保存凭据记录，实际认证仍依赖系统/网站。
 - 本机跨浏览器同步需要安装 Native Messaging 宿主；支持 Windows / macOS / Linux 上的 Chromium 内核浏览器，宿主包提供 5 个平台二进制。
-- 设备快速解锁仅支持 Windows 同步宿主；macOS/Linux 宿主明确返回不支持。绑定与本机 Windows 用户绑定，换机、重装系统或宿主数据目录丢失后只能使用主密码（以及密钥文件）解锁。启用时优先要求 Windows Hello 交互验证（WebAuthn 平台认证器）；浏览器/系统不支持平台认证器时回退到 DPAPI，不再额外要求交互验证。
+- 设备快速解锁仅支持 Windows 同步宿主；macOS/Linux 宿主明确返回不支持。绑定与本机 Windows 用户绑定，换机、重装系统或宿主数据目录丢失后只能使用主密码（以及密钥文件）解锁。启用时优先要求 Windows Hello 交互验证（WebAuthn 平台认证器）；浏览器/系统不支持平台认证器时无法启用设备快速解锁，只能使用主密码（以及密钥文件）。
 - 同步使用同一个主密码：浏览器 B 首次导入需输入浏览器 A 的主密码；选择“新安装”则不会导入，也不会覆盖宿主数据。
 - 本机同步两端同时修改同一账号时，当前版本依赖宿主 revision 冲突检测，不做自动条目级合并；冲突时保留本地并等待重试。WebDAV 备份不做实时合并，只有显式备份/恢复。
 - 不提供云同步；跨设备仍需使用加密备份手动迁移。
@@ -667,6 +667,7 @@ Playwright Chromium API E2E 已通过：
 
 ## 十三、版本记录
 
+- **v2.3.1**：修复旧版设备绑定缺少 Windows Hello 凭据时可能绕过 PIN 直接解锁的问题（宿主强制校验 credentialId，旧绑定需重新启用）；WebDAV 备份卡片迁移到“同步与备份”，统一地址/用户名/密码输入宽度与备份/恢复按钮布局。
 - **v2.3.0**：一次性分享升级 v2（`expiresAt` 参与 KDF 与 AAD），新增分享筛选、默认不勾选与“未勾选条目不分享”提示；加密备份升级 v5（有效期绑定 KDF，独立密码必填）；KDBX/备份/分享导出增加强随机密码生成按钮；TOTP 增加 popup 快捷入口与倒计时进度；Passkey 记录随条目加密/备份；WebDAV 改为独立加密备份与显式恢复，与本机同步彻底分离；Windows Hello 平台认证器 + DPAPI 设备快速解锁；统一文件选择控件。
 - **v2.2.1**：统一文件选择控件（PSL、KDBX、密钥文件、分享导入等）为“选择文件 + 文件名”样式；一次性分享新增账号筛选，并改为默认不勾选，避免误分享整个密码库。
 - **v2.2.0**：新增 Windows DPAPI 设备快速解锁：宿主保存受当前 Windows 用户保护的 VaultKey 副本，扩展不保存主密码；popup/设置页可启用、移除与一键解锁，主密码始终可回退；删除密码库、回滚迁移格式或清空扩展会清理绑定。修复浅色磨砂/液态材质下提示条白底白字，新增“窗口失焦时自动隐藏内容”开关。

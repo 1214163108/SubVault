@@ -536,7 +536,9 @@ namespace SubVaultSync
                     return new Dictionary<string, object>
                     {
                         { "ok", true }, { "supported", true }, { "exists", true },
-                        { "createdAt", createdAt }, { "cipher", "DPAPI" }, { "credentialId", credentialId ?? "" }
+                        { "createdAt", createdAt }, { "cipher", "DPAPI" },
+                        { "credentialId", credentialId ?? "" },
+                        { "needsHello", string.IsNullOrEmpty(credentialId) }
                     };
                 }
                 catch
@@ -616,6 +618,22 @@ namespace SubVaultSync
                 try
                 {
                     var record = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+                    string storedCredential = record != null && record.ContainsKey("credentialId")
+                        ? Convert.ToString(record["credentialId"]) ?? ""
+                        : "";
+                    string presentedCredential = message != null && message.ContainsKey("credentialId")
+                        ? Convert.ToString(message["credentialId"]) ?? ""
+                        : "";
+                    if (string.IsNullOrEmpty(storedCredential) || string.IsNullOrEmpty(presentedCredential)
+                        || !string.Equals(storedCredential, presentedCredential, StringComparison.Ordinal))
+                    {
+                        return new Dictionary<string, object>
+                        {
+                            { "ok", false }, { "supported", true }, { "exists", true },
+                            { "needsHelloSetup", true },
+                            { "error", "需要 Windows Hello 验证。此绑定创建于旧版本或缺少验证凭据，请用主密码解锁后在设置页重新启用设备快速解锁" }
+                        };
+                    }
                     string protectedText = record != null && record.ContainsKey("protectedKey")
                         ? Convert.ToString(record["protectedKey"])
                         : "";

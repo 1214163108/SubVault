@@ -42,9 +42,10 @@ files in the report.
   assertion first and then asks the host to unprotect the VaultKey. The
   extension never stores the master password, the host never writes the
   VaultKey in plaintext, and the binding is never synchronized. If the browser
-  or system cannot provide a platform authenticator, the binding falls back to
-  DPAPI without an interactive prompt. The master password (plus optional key
-  file) always remains a fallback. Removing the binding, deleting the vault,
+  or system cannot provide a platform authenticator, device quick unlock cannot
+  be enabled. Bindings created by older versions without a credential id are
+  rejected and must be re-enabled; they cannot fall back to a promptless DPAPI
+  unlock. The master password (plus optional key file) always remains a fallback. Removing the binding, deleting the vault,
   rolling back the format, or wiping the extension asks the host to delete the
   binding.
 - The in-memory key and pending save sessions use `chrome.storage.session`.

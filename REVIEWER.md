@@ -104,9 +104,10 @@ a handful of account records.
   and credential id in `device.json` / `device-<id>.json`; the extension does
   not store the master password and the binding is never synced. Unlocking
   performs a platform-authenticator assertion and then asks the host to
-  unprotect the VaultKey; if no platform authenticator is available the binding
-  falls back to DPAPI without an interactive prompt. The master password (and
-  optional key file) remains a fallback. Removing the binding, deleting the
+  unprotect the VaultKey; without a platform authenticator device quick unlock
+  cannot be enabled, and older bindings without a credential id are rejected
+  instead of falling back to a promptless DPAPI unlock. The master password
+  (and optional key file) remains a fallback. Removing the binding, deleting the
   vault, rolling back the format, or wiping the extension requests deletion of
   the host-side binding.
 

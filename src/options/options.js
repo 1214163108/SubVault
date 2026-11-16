@@ -37,6 +37,7 @@ import {
   createDeviceCredential,
   describeVerificationError,
   deviceVerificationSupported,
+  platformVerifierAvailable,
 } from '../lib/webauthn.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1347,10 +1348,24 @@ async function refreshGateDeviceUnlock() {
   const vaultId = $('gateVaultSelect')?.value || '';
   try {
     const status = await send('SV_DEVICE_STATUS', { vaultId });
-    button.hidden = !(status.ok && status.supported && status.exists);
+    const available = Boolean(status.ok && status.supported && status.exists);
+    const ready = Boolean(available && status.credentialId && !status.needsHello);
+    button.hidden = !available;
+    button.disabled = !ready;
     button.dataset.credentialId = status.credentialId || '';
+    button.title = ready
+      ? tr('使用 Windows Hello 解锁')
+      : tr('此绑定缺少 Windows Hello 验证，请用主密码解锁后在设置页重新启用');
+    const hint = $('gateDeviceHint');
+    if (hint) {
+      hint.hidden = !available;
+      hint.textContent = ready
+        ? tr('解锁时需要 Windows Hello 验证')
+        : tr('旧绑定缺少 Windows Hello 验证，请用主密码解锁后在设置页重新启用');
+    }
   } catch {
     button.hidden = true;
+    if ($('gateDeviceHint')) $('gateDeviceHint').hidden = true;
   }
 }
 
@@ -1361,9 +1376,10 @@ async function deviceUnlockFromGate() {
   const credentialId = button.dataset.credentialId || '';
   setBusy(button, true, tr('正在验证…'));
   try {
-    if (credentialId) await assertDeviceCredential(credentialId);
+    if (!credentialId) throw new Error(tr('此设备绑定缺少 Windows Hello 验证，请用主密码解锁后在设置页重新启用'));
+    await assertDeviceCredential(credentialId);
     setBusy(button, true, tr('正在解锁…'));
-    const result = await send('SV_DEVICE_UNLOCK', { vaultId });
+    const result = await send('SV_DEVICE_UNLOCK', { vaultId, credentialId });
     if (!result.ok) throw new Error(result.error || tr('设备快速解锁失败，请使用主密码解锁'));
     hideGate();
     await loadAll();
@@ -1379,15 +1395,22 @@ async function refreshDeviceBinding() {
   try {
     const status = await send('SV_DEVICE_STATUS', {});
     const supported = Boolean(status.ok && status.supported);
-    $('deviceBindTag').textContent = !supported ? tr('不可用') : status.exists ? tr('已启用') : tr('未启用');
+    const needsHello = Boolean(status.needsHello || (status.exists && !status.credentialId));
+    $('deviceBindTag').textContent = !supported
+      ? tr('不可用')
+      : status.exists
+        ? (needsHello ? tr('需重新启用') : tr('已启用'))
+        : tr('未启用');
     if (!supported) {
       $('deviceBindStatus').textContent = status.error || tr('当前同步宿主不支持设备快速解锁（仅 Windows DPAPI）。');
+    } else if (needsHello) {
+      $('deviceBindStatus').textContent = tr('旧绑定缺少 Windows Hello 验证，无法绕过 PIN 直接解锁；请重新启用设备快速解锁。');
     } else if (status.exists) {
       $('deviceBindStatus').textContent = `${tr('已在本机绑定')} · ${formatDateTime(status.createdAt)} · ${tr('解锁时需要 Windows Hello 验证')}`;
     } else {
       $('deviceBindStatus').textContent = tr('尚未启用。启用时需要密码库已解锁。');
     }
-    $('deviceEnableBtn').hidden = !supported || Boolean(status.exists);
+    $('deviceEnableBtn').hidden = !supported || (Boolean(status.exists) && !needsHello);
     $('deviceDisableBtn').hidden = !supported || !status.exists;
     return status;
   } catch (error) {
@@ -1405,6 +1428,7 @@ async function enableDeviceBinding() {
   setBusy(button, true, tr('正在验证…'));
   try {
     if (!deviceVerificationSupported()) throw new Error(tr('当前浏览器不支持 Windows Hello 验证'));
+    if (!(await platformVerifierAvailable())) throw new Error(tr('当前设备没有可用的 Windows Hello 验证器'));
     const credentialId = await createDeviceCredential();
     setBusy(button, true, tr('正在启用…'));
     const result = await send('SV_DEVICE_ENABLE', { credentialId });
@@ -3295,6 +3319,7 @@ function arrangeSettingsSections() {
     if (card && section) section.appendChild(card);
   };
   move('syncCard', 'sync');
+  move('webdavCard', 'sync');
   move('takeoverCard', 'takeover');
   move('generalCard', 'general');
 }

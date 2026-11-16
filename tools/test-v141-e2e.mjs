@@ -148,7 +148,10 @@ try {
   // 3. Popup standalone generator fills the add-entry dialog.
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/src/popup/popup.html`);
+  await popup.bringToFront();
   await popup.waitForTimeout(700);
+  const popupShield = popup.locator('#privacyShield');
+  if (await popupShield.isVisible().catch(() => false)) await popupShield.click();
   await popup.locator('#genBtn').click();
   await popup.locator('#genDialog').waitFor({ state: 'visible', timeout: 5000 });
   const output = ((await popup.locator('#genOutput').textContent()) || '').trim();

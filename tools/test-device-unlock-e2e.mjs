@@ -15,6 +15,21 @@ const context = await chromium.launchPersistentContext(PROFILE, {
   env: { ...process.env, SUBVAULT_SYNC_DIR: SYNC_DIR },
   args: [`--disable-extensions-except=${ROOT}`, `--load-extension=${ROOT}`],
 });
+await context.addInitScript(() => {
+  window.__hello = { get: 0 };
+  class FakePublicKeyCredential {
+    static async isUserVerifyingPlatformAuthenticatorAvailable() { return true; }
+  }
+  Object.defineProperty(window, 'PublicKeyCredential', { value: FakePublicKeyCredential, configurable: true });
+  const raw = new Uint8Array([9, 8, 7, 6, 5]).buffer;
+  Object.defineProperty(navigator, 'credentials', {
+    configurable: true,
+    value: {
+      async create() { return { type: 'public-key', rawId: raw }; },
+      async get() { window.__hello.get += 1; return { type: 'public-key', rawId: raw }; },
+    },
+  });
+});
 let worker = context.serviceWorkers()[0];
 if (!worker) worker = await context.waitForEvent('serviceworker');
 const extensionId = worker.url().split('/')[2];
@@ -40,7 +55,7 @@ const before = await send({ type: 'SV_DEVICE_STATUS' });
 result.initialDeviceStatus = before;
 result.initiallyDisabled = before.ok === true && before.supported === true && before.exists === false;
 
-const enabled = await send({ type: 'SV_DEVICE_ENABLE' });
+const enabled = await send({ type: 'SV_DEVICE_ENABLE', credentialId: 'test-device-credential' });
 result.enable = enabled;
 result.enabled = enabled.ok === true && enabled.exists === true;
 await options.click('[data-section="security"]');
@@ -55,12 +70,22 @@ await send({ type: 'SV_LOCK' });
 await popup.reload();
 await popup.waitForSelector('#lockedView', { state: 'visible' });
 await popup.waitForSelector('#deviceUnlockRow', { state: 'visible' });
+await popup.waitForTimeout(1200);
+result.deviceBtnEnabled = await popup.locator('#deviceUnlockBtn').isEnabled();
+result.deviceHint = await popup.locator('#deviceUnlockHint').textContent().catch(() => '');
 result.deviceRowVisibleWhileLocked = await popup.locator('#deviceUnlockRow').isVisible();
 const lockedState = await send({ type: 'SV_GET_STATUS' });
 result.lockedBefore = lockedState.locked === true;
 
 await popup.click('#deviceUnlockBtn');
-await popup.waitForSelector('#vaultView', { state: 'visible' });
+try {
+  await popup.waitForSelector('#vaultView', { state: 'visible', timeout: 8000 });
+} catch (error) {
+  result.unlockError = await popup.locator('#unlockError').textContent().catch(() => '');
+  await popup.screenshot({ path: '.tmp/device-unlock-fail.png' });
+  throw error;
+}
+result.helloGetCalls = await popup.evaluate(() => window.__hello?.get || 0);
 const afterDevice = await send({ type: 'SV_GET_STATUS' });
 const deviceEntries = await send({ type: 'SV_LIST_ENTRIES' });
 result.deviceUnlocked = afterDevice.locked === false && afterDevice.initialized === true;
@@ -95,6 +120,7 @@ result.pass = [
   result.lockedBefore,
   result.deviceUnlocked,
   result.entryPresent,
+  result.helloGetCalls >= 1,
   result.disabled,
   result.optionsBindTag.includes('已启用'),
   result.optionsDisableVisible,

@@ -850,12 +850,14 @@ async function refreshDeviceUnlock(result = null) {
   const vaultId = $('unlockVaultSelect')?.value || result?.activeVaultId || '';
   const status = await send('SV_DEVICE_STATUS', { vaultId });
   const available = Boolean(status.ok && status.supported && status.exists);
+  const ready = Boolean(available && status.credentialId && !status.needsHello);
   row.hidden = !available;
   $('deviceUnlockBtn').dataset.credentialId = status.credentialId || '';
+  $('deviceUnlockBtn').disabled = !ready;
   if (available && hint) {
-    hint.textContent = status.credentialId
+    hint.textContent = ready
       ? '需要 Windows Hello 验证；绑定仅在本机有效，不保存主密码。'
-      : '设备绑定仅在本机有效，不保存主密码，也不会同步。';
+      : '此绑定缺少 Windows Hello 验证，请用主密码解锁后在设置页重新启用。';
   }
 }
 
@@ -867,8 +869,9 @@ async function unlockWithDevice() {
   const vaultId = $('unlockVaultSelect')?.value || '';
   try {
     const credentialId = button.dataset.credentialId || '';
-    if (credentialId) await assertDeviceCredential(credentialId);
-    const result = await send('SV_DEVICE_UNLOCK', { vaultId });
+    if (!credentialId) throw new Error('此设备绑定缺少 Windows Hello 验证，请用主密码解锁后重新启用设备快速解锁');
+    await assertDeviceCredential(credentialId);
+    const result = await send('SV_DEVICE_UNLOCK', { vaultId, credentialId });
     if (!result.ok) {
       setError($('unlockError'), result.error || '设备快速解锁失败，请使用主密码解锁');
       return;

@@ -6,7 +6,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 ROOT = Path(__file__).resolve().parent.parent
 HOST = ROOT / "native-host"
 BIN = ROOT / "dist" / "native-host"
-OUT = ROOT / "dist" / "subvault-sync-host-1.5.0.zip"
+OUT = ROOT / "dist" / "subvault-sync-host-1.5.1.zip"
 
 # (archive name, source path, executable)
 FILES = [

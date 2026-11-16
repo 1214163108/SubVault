@@ -463,40 +463,55 @@
               </div>
               <span id="webdavBackupTag" class="tag">未配置</span>
             </div>
-            <label class="field">
-              <span>WebDAV 地址</span>
-              <input id="webdavUrl" type="url" placeholder="https://dav.example.com/remote.php/dav/files/user" autocomplete="off" spellcheck="false" />
-            </label>
-            <label class="field">
-              <span>用户名</span>
-              <input id="webdavUsername" type="text" autocomplete="username" spellcheck="false" />
-            </label>
-            <label class="field">
-              <span>密码</span>
-              <input id="webdavPassword" type="password" autocomplete="new-password" />
-            </label>
-            <div class="button-row">
-              <button id="webdavSaveBtn" class="btn primary" type="button">保存 WebDAV 配置</button>
-              <button id="webdavClearBtn" class="btn danger-ghost" type="button" hidden>清除配置</button>
-            </div>
-            <div id="webdavStatus" class="hint"></div>
-            <div id="webdavError" class="warning-box" hidden></div>
-            <div class="button-row">
-              <button id="webdavBackupBtn" class="btn primary" type="button">立即备份到 WebDAV</button>
-            </div>
-            <div id="webdavBackupMeta" class="hint"></div>
-            <label class="field">
-              <span>恢复用主密码</span>
-              <div class="secret-row">
-                <input id="webdavRestorePassword" type="password" autocomplete="current-password" placeholder="恢复会覆盖当前密码库" />
+            <div class="webdav-section">
+              <div class="form-grid two">
+                <label class="field span-2">
+                  <span>WebDAV 地址</span>
+                  <input id="webdavUrl" type="url" placeholder="https://dav.example.com/remote.php/dav/files/user" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="field">
+                  <span>用户名</span>
+                  <input id="webdavUsername" type="text" autocomplete="username" spellcheck="false" />
+                </label>
+                <label class="field">
+                  <span>密码</span>
+                  <input id="webdavPassword" type="password" autocomplete="new-password" />
+                </label>
               </div>
-            </label>
-            <label class="field" id="webdavRestoreKeyFileRow">
-              <span>密钥文件（仅当备份启用时选择）</span>
-              <input id="webdavRestoreKeyFile" type="file" />
-            </label>
-            <div class="button-row">
-              <button id="webdavRestoreBtn" class="btn danger-ghost" type="button">从 WebDAV 恢复（覆盖当前库）</button>
+              <div class="webdav-actions">
+                <div id="webdavStatus" class="hint"></div>
+                <div class="button-row">
+                  <button id="webdavSaveBtn" class="btn primary" type="button">保存 WebDAV 配置</button>
+                  <button id="webdavClearBtn" class="btn danger-ghost" type="button" hidden>清除配置</button>
+                </div>
+              </div>
+              <div id="webdavError" class="warning-box" hidden></div>
+            </div>
+            <div class="webdav-section">
+              <div class="webdav-actions">
+                <div>
+                  <h3>备份</h3>
+                  <div id="webdavBackupMeta" class="hint"></div>
+                </div>
+                <button id="webdavBackupBtn" class="btn primary" type="button">立即备份到 WebDAV</button>
+              </div>
+            </div>
+            <div class="webdav-section">
+              <h3>恢复</h3>
+              <div class="form-grid two">
+                <label class="field span-2">
+                  <span>恢复用主密码</span>
+                  <input id="webdavRestorePassword" type="password" autocomplete="current-password" placeholder="恢复会覆盖当前密码库" />
+                </label>
+                <label class="field span-2" id="webdavRestoreKeyFileRow">
+                  <span>密钥文件（仅当备份启用时选择）</span>
+                  <input id="webdavRestoreKeyFile" type="file" />
+                </label>
+              </div>
+              <div class="webdav-actions">
+                <span class="hint">恢复后当前密码库会被覆盖，并需要重新解锁。</span>
+                <button id="webdavRestoreBtn" class="btn danger-ghost" type="button">从 WebDAV 恢复</button>
+              </div>
             </div>
             <div class="notice">
               地址和账号只保存在加密密码库中；每条命令临时传给宿主，宿主不会把凭据写入磁盘。地址必须是 HTTPS，本机测试可用 http://127.0.0.1。
@@ -1124,6 +1139,7 @@
             <input id="gateUnlockKeyFile" type="file" />
           </label>
           <button id="gateDeviceUnlockBtn" class="btn ghost block" type="button" hidden>使用本机设备解锁</button>
+          <p id="gateDeviceHint" class="hint" hidden></p>
           <button id="gateUnlockBtn" class="btn primary block" type="submit">解锁</button>
         </form>
 

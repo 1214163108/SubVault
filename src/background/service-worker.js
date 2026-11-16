@@ -1152,6 +1152,7 @@ async function deviceStatusFor(vaultId = activeVaultId) {
       createdAt: Number(status.createdAt) || 0,
       cipher: status.cipher || '',
       credentialId: String(status.credentialId || ''),
+      needsHello: Boolean(status.needsHello),
       vaultId: id,
     };
   } catch (error) {
@@ -1167,6 +1168,7 @@ async function deviceStatusFor(vaultId = activeVaultId) {
 
 async function enableDeviceUnlock(credentialId = '') {
   await requireUnlocked();
+  if (!credentialId) throw new Error('需要先完成 Windows Hello 验证');
   if (!isV4VaultBlob(await getVaultBlob())) {
     throw new Error('仅 v4 密码库支持设备快速解锁，请先用主密码解锁完成迁移');
   }
@@ -1192,12 +1194,15 @@ async function disableDeviceUnlock(vaultId = activeVaultId) {
   return deviceStatusFor(id);
 }
 
-async function unlockWithDevice(vaultId = activeVaultId) {
+async function unlockWithDevice(vaultId = activeVaultId, credentialId = '') {
   if (session) return { ok: true, alreadyUnlocked: true, count: session.data?.entries?.length || 0 };
   await ensureVaultIndex();
   const id = vaultId || activeVaultId || DEFAULT_VAULT_ID;
+  if (!credentialId) {
+    throw new Error('此设备绑定缺少 Windows Hello 验证凭据，请用主密码解锁后在设置页重新启用设备快速解锁');
+  }
   if (id !== activeVaultId) await setActiveVault(id);
-  const result = await nativeRequest('device-unlock', { vaultId: id }, 6000);
+  const result = await nativeRequest('device-unlock', { vaultId: id, credentialId }, 6000);
   if (!result?.ok || !result.key) {
     throw new Error(result?.error || '设备快速解锁失败，请使用主密码解锁');
   }
@@ -3010,7 +3015,10 @@ async function handleMessage(message, sender) {
 
     case 'SV_DEVICE_UNLOCK':
       if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
-      return enqueue(() => unlockWithDevice(String(message.vaultId || '') || activeVaultId));
+      return enqueue(() => unlockWithDevice(
+        String(message.vaultId || '') || activeVaultId,
+        String(message.credentialId || ''),
+      ));
 
     case 'SV_SETUP':
       return enqueue(async () => {

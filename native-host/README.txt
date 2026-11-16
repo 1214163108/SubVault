@@ -42,7 +42,7 @@ HKCU\Software\Chromium\NativeMessagingHosts\com.subvault.sync
 启用后，扩展先通过 WebAuthn 平台认证器（Windows Hello）创建凭据，Windows
 宿主再用当前用户的 DPAPI 保护一份仅限本机的 VaultKey 副本，保存为
 data/device.json（默认库）或 data/device-<id>.json，并记录 credentialId。
-解锁时先做 Windows Hello 验证，再解保护；平台认证器不可用时回退 DPAPI。
+解锁时先做 Windows Hello 验证，再解保护；没有平台认证器时无法启用设备快速解锁。旧版本创建且缺少 credentialId 的绑定会被拒绝，需在主密码解锁后重新启用，不能绕过 PIN。
 扩展不保存主密码，宿主不会以明文保存 VaultKey；绑定不参与同步。主密码
 始终可回退。移除绑定、删除密码库、回滚格式或清空扩展时，宿主会删除对应
 文件。macOS / Linux 宿主明确返回不支持。

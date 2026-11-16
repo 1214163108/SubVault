@@ -47,6 +47,8 @@ try {
   if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 15000 });
   const extensionId = worker.url().split('/')[2];
   const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(String(error)));
   await page.goto(`chrome-extension://${extensionId}/src/options/options.html`);
   await page.waitForFunction(() => Boolean(window.chrome?.runtime?.id));
   const setup = await page.evaluate(() =>
@@ -80,8 +82,22 @@ try {
     throw new Error(`imported metadata missing: ${JSON.stringify(entry)}`);
   }
 
+  await page.reload();
+  await page.locator('#gate').waitFor({ state: 'hidden', timeout: 15000 });
   await page.locator('[data-section="vault"]').click();
-  await page.locator('.entry-card').first().waitFor({ state: 'visible', timeout: 15000 });
+  try {
+    await page.locator('.entry-card').first().waitFor({ state: 'visible', timeout: 30000 });
+  } catch (error) {
+    await page.screenshot({ path: '.tmp/import-fail.png', fullPage: true });
+    console.error(JSON.stringify({
+      pageErrors,
+      gateHidden: await page.locator('#gate').isHidden().catch(() => null),
+      vaultVisible: await page.locator('#section-vault').isVisible().catch(() => null),
+      listHtml: (await page.locator('#vaultList').innerHTML().catch(() => '')).slice(0, 1200),
+      importResult: await page.locator('#importResult').textContent().catch(() => ''),
+    }, null, 2));
+    throw error;
+  }
   await page.locator('.entry-select').first().check();
   await page.locator('#bulkBar').waitFor({ state: 'visible' });
   await page.locator('#bulkFavoriteBtn').click();
