@@ -27,7 +27,7 @@ try {
   await page.goto(`chrome-extension://${extensionId}/src/options/options.html`);
   await page.waitForFunction(() => Boolean(window.chrome?.runtime?.id));
   const setup = await page.evaluate(() =>
-    chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'lock-password' }),
+    chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'SubVault-Test-2026!Qm7#' }),
   );
   if (!setup?.ok) throw new Error(`setup: ${setup?.error}`);
   await page.evaluate(() =>

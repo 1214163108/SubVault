@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SubVault 设置</title>
     <link rel="stylesheet" href="options.css" />
+    <script src="../vendor/kdbxweb-shim.js"></script>
+    <script src="../vendor/kdbxweb.min.js"></script>
   </head>
   <body class="booting">
     <div id="shell" class="shell">
@@ -17,18 +19,37 @@
           </div>
         </div>
 
+        <div class="settings-search">
+          <input id="settingsSearch" type="search" placeholder="搜索设置…" autocomplete="off" spellcheck="false" aria-label="搜索设置" />
+        </div>
+
         <nav class="nav">
           <button class="nav-item active" type="button" data-section="vault">
             <span class="nav-dot"></span>密码库
           </button>
+          <button class="nav-item" type="button" data-section="general">
+            <span class="nav-dot"></span>通用
+          </button>
+          <button class="nav-item" type="button" data-section="security">
+            <span class="nav-dot"></span>安全
+          </button>
+          <button class="nav-item" type="button" data-section="takeover">
+            <span class="nav-dot"></span>浏览器接管
+          </button>
+          <button class="nav-item" type="button" data-section="domains">
+            <span class="nav-dot"></span>域名与站点
+          </button>
+          <button class="nav-item" type="button" data-section="sync">
+            <span class="nav-dot"></span>同步与备份
+          </button>
           <button class="nav-item" type="button" data-section="transfer">
             <span class="nav-dot"></span>导入与导出
           </button>
-          <button class="nav-item" type="button" data-section="domains">
-            <span class="nav-dot"></span>子域规则
+          <button class="nav-item" type="button" data-section="share">
+            <span class="nav-dot"></span>分享与旅行
           </button>
-          <button class="nav-item" type="button" data-section="security">
-            <span class="nav-dot"></span>安全与接管
+          <button class="nav-item" type="button" data-section="language">
+            <span class="nav-dot"></span>语言与格式
           </button>
           <button class="nav-item" type="button" data-section="about">
             <span class="nav-dot"></span>关于
@@ -72,6 +93,7 @@
             <div class="stat warn"><strong id="statWeak">0</strong><span>弱密码</span></div>
             <div class="stat warn"><strong id="statReused">0</strong><span>重复使用</span></div>
             <div class="stat warn"><strong id="statOld">0</strong><span>超过 1 年</span></div>
+            <div class="stat warn"><strong id="statHttp">0</strong><span>HTTP 明文</span></div>
           </div>
 
           <div class="toolbar">
@@ -83,12 +105,17 @@
             </div>
             <select id="filterSelect" aria-label="筛选">
               <option value="all">全部账号</option>
+              <option value="favorite">收藏</option>
+              <option value="recent">最近使用</option>
               <option value="weak">弱密码</option>
               <option value="reused">重复使用</option>
               <option value="old">超过 1 年</option>
+              <option value="http">HTTP 明文</option>
+              <option value="totp">含动态码</option>
             </select>
             <select id="sortSelect" aria-label="排序">
               <option value="host">按网站</option>
+              <option value="recent">最近使用</option>
               <option value="updated">最近更新</option>
               <option value="changed">记录时间</option>
             </select>
@@ -96,6 +123,14 @@
           </div>
 
           <div id="duplicatesPanel" class="result" hidden></div>
+
+          <div id="bulkBar" class="bulk-bar" hidden>
+            <span id="bulkCount">已选 0 项</span>
+            <button id="bulkFavoriteBtn" class="btn subtle" type="button">收藏</button>
+            <button id="bulkUnfavoriteBtn" class="btn subtle" type="button">取消收藏</button>
+            <button id="bulkDeleteBtn" class="btn danger" type="button">删除</button>
+            <button id="bulkClearBtn" class="link-btn" type="button">清除选择</button>
+          </div>
 
           <div id="vaultList" class="vault-list"></div>
           <div id="vaultEmpty" class="empty" hidden>
@@ -112,25 +147,53 @@
           <div class="card">
             <div class="card-head">
               <div>
-                <h2>导入浏览器密码</h2>
-                <p>支持 Chrome / Edge / Firefox / Bitwarden / LastPass / 1Password 导出的 CSV。</p>
+                <h2>导入密码</h2>
+                <p>支持 Chrome / Edge / Firefox / Bitwarden / LastPass / 1Password 导出的 CSV，以及 Bitwarden 未加密 JSON、1Password 1PUX。</p>
               </div>
-              <span class="tag">CSV</span>
+              <span class="tag">CSV · JSON · 1PUX</span>
             </div>
             <ol class="steps">
-              <li>在 Chrome 打开 <code>chrome://password-manager/settings</code>，选择“导出密码”。</li>
-              <li>把导出的 CSV 文件拖到下方，或点击选择文件。</li>
-              <li>导入后建议删除 CSV 文件，因为它是明文。</li>
+              <li>在浏览器或密码管理器中导出 CSV / JSON / 1PUX 文件。</li>
+              <li>把文件拖到下方，或点击选择文件。</li>
+              <li>导入后建议删除明文导出文件；SubVault 会先下载导入前加密快照。</li>
             </ol>
             <div id="dropZone" class="dropzone">
-              <input id="csvFile" type="file" accept=".csv,text/csv" hidden />
-              <button id="chooseCsvBtn" class="btn primary" type="button">选择 CSV 文件</button>
-              <p>或把文件拖到这里</p>
+              <input id="csvFile" type="file" accept=".csv,.json,.1pux,text/csv,application/json" hidden />
+              <button id="chooseCsvBtn" class="btn primary" type="button">选择导入文件</button>
+              <p>支持 CSV / Bitwarden JSON / 1PUX，或把文件拖到这里</p>
             </div>
             <div id="importPreview" class="result preview" hidden></div>
             <div id="importResult" class="result" hidden></div>
             <div class="notice">
               合并规则：默认同一主域下的同一账号只保留“密码记录时间”最新的一条；配置为独立主域后，按每个子域分别合并。
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>KeePass KDBX</h2>
+                <p>导入 .kdbx 密码库，或把当前账号导出为 KeePass 4 格式。</p>
+              </div>
+              <span class="tag">互操作</span>
+            </div>
+            <div class="inline-form">
+              <input id="kdbxFile" type="file" accept=".kdbx" />
+              <input id="kdbxPassword" type="password" placeholder="该 KDBX 的密码" autocomplete="off" />
+              <label class="key-file-field">
+                <span>密钥文件（可选）</span>
+                <input id="kdbxKeyFile" type="file" />
+              </label>
+              <button id="kdbxImportBtn" class="btn primary" type="button">导入 KDBX</button>
+            </div>
+            <p id="kdbxError" class="form-error" hidden></p>
+            <div class="inline-form">
+              <input id="kdbxExportPassword" type="password" placeholder="导出密码（至少 10 位）" autocomplete="new-password" />
+              <button id="kdbxExportGenerate" class="btn ghost" type="button" aria-label="生成强随机密码">生成</button>
+              <button id="kdbxExportBtn" class="btn" type="button">导出 KDBX</button>
+            </div>
+            <div class="notice">
+              KDBX 使用 Argon2id 派生密钥；导入时在本地解析，不会上传文件。导出文件请与主密码分开保管。
             </div>
           </div>
 
@@ -144,8 +207,24 @@
             </div>
             <label class="field">
               <span>独立备份密码（可选）</span>
-              <input id="exportBackupPassword" type="password" autocomplete="new-password" placeholder="至少 10 位；留空则使用主密码保护" />
+              <div class="secret-row">
+                <input id="exportBackupPassword" type="password" autocomplete="new-password" placeholder="至少 10 位；留空则使用主密码保护" />
+                <button id="exportBackupGenerate" class="btn ghost" type="button" aria-label="生成强随机密码">生成</button>
+              </div>
             </label>
+            <label class="field">
+              <span>备份有效期</span>
+              <select id="exportBackupExpiry">
+                <option value="0">不过期（推荐长期备份）</option>
+                <option value="1">1 天</option>
+                <option value="7">7 天</option>
+                <option value="30">30 天</option>
+                <option value="90">90 天</option>
+              </select>
+            </label>
+            <div class="notice">
+              设置有效期后，过期时间会绑定到备份密钥派生；文件过期后，即使知道备份密码也无法解密。设置有效期必须填写独立备份密码。
+            </div>
             <div class="notice">
               备份会包含账号、设置、子域规则和站点忽略列表，但不包含主密码或派生密钥。独立密码会用新的随机盐重新加密，不会保存在扩展里。
             </div>
@@ -155,6 +234,11 @@
               <input id="backupFile" type="file" accept=".json,application/json" hidden />
             </div>
             <div id="backupFileName" class="file-name" hidden></div>
+            <div id="backupHealth" class="status-box">最近备份：尚未记录</div>
+            <div class="button-row">
+              <button id="recoveryKitBtn" class="btn" type="button">下载恢复说明</button>
+              <button id="verifyBackupBtn" class="btn" type="button">校验所选备份结构</button>
+            </div>
             <div class="form-grid two backup-options">
               <label class="field">
                 <span>恢复方式</span>
@@ -245,6 +329,23 @@
           <div class="card">
             <div class="card-head">
               <div>
+                <h2>Public Suffix List 更新</h2>
+                <p>内置完整 PSL。可手动导入官方 <code>public_suffix_list.dat</code> 以覆盖新增后缀；规则只保存在本机。</p>
+              </div>
+              <span id="pslRuleCount" class="tag">内置</span>
+            </div>
+            <div class="inline-form">
+              <input id="pslFile" type="file" accept=".dat,.txt,text/plain" />
+              <button id="pslImportBtn" class="btn primary" type="button">导入 PSL</button>
+            </div>
+            <p id="pslStatus" class="fineprint">未导入自定义规则，使用内置完整 PSL。</p>
+            <p id="pslError" class="form-error" hidden></p>
+            <button id="pslClearBtn" class="btn ghost" type="button" hidden>清除自定义 PSL</button>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
                 <h2>规则预览</h2>
                 <p>输入一个域名，查看它当前会匹配到哪个存储桶。</p>
               </div>
@@ -276,10 +377,212 @@
         </section>
 
         <section id="section-security" class="section" hidden>
+          <div class="card" id="syncCard">
+            <div class="card-head">
+              <div>
+                <h2>同步</h2>
+                <p id="syncIntro">通过本机 Native Messaging 宿主在同一台电脑的不同浏览器之间同步加密密码库，不经过网络。</p>
+              </div>
+              <span id="syncStateTag" class="tag">检测中</span>
+            </div>
+            <div id="syncStateBox" class="status-box">正在检测本机同步宿主…</div>
+            <div class="sync-grid">
+              <div>
+                <span class="sync-label">上次同步</span>
+                <strong id="syncLastAt" class="sync-value">从未</strong>
+              </div>
+              <div>
+                <span class="sync-label">最近方向</span>
+                <strong id="syncLastDirection" class="sync-value">—</strong>
+              </div>
+              <div>
+                <span class="sync-label">远端版本</span>
+                <strong id="syncRevision" class="sync-value">—</strong>
+              </div>
+            </div>
+            <div class="notice">
+              本机同步只通过 Native 宿主读写本机固定目录，适合同一台电脑上的不同浏览器。WebDAV 备份在本页下方单独配置，两者互不干扰。
+            </div>
+            <label class="select-row">
+              <span>
+                <strong>同步触发方式</strong>
+                <small>实时：保存后立即推送、远端变化立即拉取；定时检查：至少间隔指定分钟数；固定时间点：每天到点后同步一次；解锁时：每次解锁比较时间戳；手动：只在点击“立即同步”时执行。</small>
+              </span>
+              <select id="syncTriggerSelect">
+                <option value="realtime">实时</option>
+                <option value="interval">定时检查</option>
+                <option value="scheduled">固定时间点</option>
+                <option value="unlock">解锁时</option>
+                <option value="manual">仅手动</option>
+              </select>
+            </label>
+            <label class="select-row" id="syncIntervalRow" hidden>
+              <span>
+                <strong>检查间隔</strong>
+                <small>两次自动同步之间至少间隔的分钟数（5–1440）。</small>
+              </span>
+              <input id="syncIntervalMinutes" type="number" min="5" max="1440" step="5" inputmode="numeric" />
+            </label>
+            <label class="select-row" id="syncScheduleRow" hidden>
+              <span>
+                <strong>每天同步时间</strong>
+                <small>浏览器在该时间之后的下一次检查会执行同步；错过时间会在恢复后补一次。</small>
+              </span>
+              <input id="syncScheduleTime" type="time" />
+            </label>
+            <div class="button-row">
+              <button id="syncNowBtn" class="btn primary" type="button">立即同步</button>
+              <button id="syncRefreshBtn" class="btn" type="button">重新检测宿主</button>
+            </div>
+            <div id="syncErrorBox" class="warning-box" hidden></div>
+            <div id="syncConflictBox" class="warning-box" hidden>
+              <strong>检测到同步冲突</strong>
+              <p id="syncConflictText">远端和本机都有新的修改，请选择保留哪个版本。</p>
+              <div class="button-row">
+                <button id="syncKeepRemoteBtn" class="btn" type="button">使用远端版本</button>
+                <button id="syncKeepLocalBtn" class="btn danger-ghost" type="button">保留本机版本</button>
+              </div>
+            </div>
+            <div id="syncSnapshotRow" class="sync-snapshot" hidden>
+              <span>
+                <strong>同步前本机快照</strong>
+                <small id="syncSnapshotText"></small>
+              </span>
+              <button id="syncRestoreSnapshotBtn" class="btn ghost" type="button">恢复快照</button>
+            </div>
+            <div class="notice">
+              同步要求两台浏览器使用相同主密码；首次导入可在解锁页完成。宿主只读写本机同步目录，扩展不会直接访问网络。
+            </div>
+          </div>
+
+          <div class="card" id="webdavCard">
+            <div class="card-head">
+              <div>
+                <h2>WebDAV 备份（独立）</h2>
+                <p>只做加密备份与恢复，不参与本机实时同步。恢复时以 WebDAV 上的备份为准，会覆盖当前密码库并要求重新解锁。</p>
+              </div>
+              <span id="webdavBackupTag" class="tag">未配置</span>
+            </div>
+            <label class="field">
+              <span>WebDAV 地址</span>
+              <input id="webdavUrl" type="url" placeholder="https://dav.example.com/remote.php/dav/files/user" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>用户名</span>
+              <input id="webdavUsername" type="text" autocomplete="username" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <input id="webdavPassword" type="password" autocomplete="new-password" />
+            </label>
+            <div class="button-row">
+              <button id="webdavSaveBtn" class="btn primary" type="button">保存 WebDAV 配置</button>
+              <button id="webdavClearBtn" class="btn danger-ghost" type="button" hidden>清除配置</button>
+            </div>
+            <div id="webdavStatus" class="hint"></div>
+            <div id="webdavError" class="warning-box" hidden></div>
+            <div class="button-row">
+              <button id="webdavBackupBtn" class="btn primary" type="button">立即备份到 WebDAV</button>
+            </div>
+            <div id="webdavBackupMeta" class="hint"></div>
+            <label class="field">
+              <span>恢复用主密码</span>
+              <div class="secret-row">
+                <input id="webdavRestorePassword" type="password" autocomplete="current-password" placeholder="恢复会覆盖当前密码库" />
+              </div>
+            </label>
+            <label class="field" id="webdavRestoreKeyFileRow">
+              <span>密钥文件（仅当备份启用时选择）</span>
+              <input id="webdavRestoreKeyFile" type="file" />
+            </label>
+            <div class="button-row">
+              <button id="webdavRestoreBtn" class="btn danger-ghost" type="button">从 WebDAV 恢复（覆盖当前库）</button>
+            </div>
+            <div class="notice">
+              地址和账号只保存在加密密码库中；每条命令临时传给宿主，宿主不会把凭据写入磁盘。地址必须是 HTTPS，本机测试可用 http://127.0.0.1。
+            </div>
+          </div>
+
           <div class="card">
             <div class="card-head">
               <div>
-                <h2>常规</h2>
+                <h2>密钥文件（双因素解锁）</h2>
+                <p>启用后，解锁时必须同时提供主密码和密钥文件。文件内容不会保存到扩展存储，只参与本地密钥派生。</p>
+              </div>
+              <span id="keyFileStatus" class="tag">未启用</span>
+            </div>
+            <label class="field">
+              <span>当前主密码</span>
+              <input id="keyFilePassword" type="password" autocomplete="current-password" placeholder="用于确认身份" />
+            </label>
+            <label class="field" id="keyFileCurrentRow" hidden>
+              <span>当前密钥文件</span>
+              <input id="keyFileCurrent" type="file" />
+            </label>
+            <label class="field">
+              <span>新密钥文件（启用或更换时选择）</span>
+              <input id="keyFileNew" type="file" />
+            </label>
+            <p id="keyFileError" class="form-error" hidden></p>
+            <div class="inline-actions">
+              <button id="keyFileSaveBtn" class="btn primary" type="button">启用 / 更新密钥文件</button>
+              <button id="keyFileDisableBtn" class="btn ghost" type="button" hidden>停用密钥文件</button>
+            </div>
+            <div class="notice">
+              忘记密钥文件将无法解锁；请把密钥文件与主密码分开备份。修改主密码不会改变已启用的密钥文件。
+            </div>
+          </div>
+
+          <div class="card" id="migrationCard" hidden>
+            <div class="card-head">
+              <div>
+                <h2>密码库格式</h2>
+                <p>v4 使用独立的 VaultKey 加密条目；主密码只用于包装 VaultKey。修改主密码时只重包 VaultKey，不重新加密整个密码库。</p>
+              </div>
+              <span id="migrationTag" class="tag">v4</span>
+            </div>
+            <p id="migrationStatus" class="fineprint"></p>
+            <div id="migrationRollbackRow" hidden>
+              <label class="field">
+                <span>主密码</span>
+                <input id="migrationPassword" type="password" autocomplete="current-password" placeholder="确认回滚到迁移前格式" />
+              </label>
+              <label class="field" id="migrationKeyFileRow" hidden>
+                <span>迁移前的密钥文件</span>
+                <input id="migrationKeyFile" type="file" />
+              </label>
+              <p id="migrationError" class="form-error" hidden></p>
+              <button id="migrationRollbackBtn" class="btn danger-ghost" type="button">回滚到迁移前格式</button>
+            </div>
+            <div class="notice">
+              回滚会恢复迁移前的完整密文备份，下一次解锁会重新迁移。回滚前请确认没有尚未同步的修改。
+            </div>
+          </div>
+
+          <div class="card" id="deviceUnlockCard">
+            <div class="card-head">
+              <div>
+                <h2>设备快速解锁</h2>
+                <p>用 Windows 当前用户的 DPAPI 保护一份仅限本机的 VaultKey；不保存主密码，绑定不会同步。</p>
+              </div>
+              <span id="deviceBindTag" class="tag">检测中</span>
+            </div>
+            <p id="deviceBindStatus" class="fineprint"></p>
+            <p id="deviceBindHint" class="fineprint">启用后，锁定时可用本机设备直接解锁。丢失设备绑定或换机器时，仍可用主密码解锁；主密码永远可回退。</p>
+            <p id="deviceBindError" class="form-error" hidden></p>
+            <div class="sync-card-actions">
+              <button id="deviceEnableBtn" class="btn primary" type="button">启用设备快速解锁</button>
+              <button id="deviceDisableBtn" class="btn danger-ghost" type="button" hidden>移除本机绑定</button>
+            </div>
+            <div class="notice">
+              设备绑定只支持 Windows 同步宿主（DPAPI）。绑定文件位于宿主数据目录，不能在其他设备使用；删除密码库或回滚格式会自动移除绑定。
+            </div>
+          </div>
+
+          <div class="card" id="generalCard">
+            <div class="card-head">
+              <div>
+                <h2>通用</h2>
                 <p>这些设置只影响本机 SubVault。</p>
               </div>
             </div>
@@ -299,6 +602,22 @@
               </select>
             </label>
             <p class="muted-text auto-lock-note">自动锁定按“最后一次 SubVault 操作”计时；系统锁屏/系统空闲锁定是独立开关，不受这里的分钟数影响。</p>
+
+            <label class="check">
+              <input id="allowSequenceSubmit" type="checkbox" data-setting="allowSequenceSubmit" />
+              <span>允许填充序列执行“按 Enter”提交（默认关闭，避免误登录）</span>
+            </label>
+
+            <label class="select-row">
+              <span>
+                <strong>密钥派生算法（KDF）</strong>
+                <small>Argon2id 更抗 GPU 暴力破解（64 MiB 内存、3 轮）；PBKDF2-SHA512 兼容性最好。修改后会在新建密码库或下次修改主密码时生效，已有密码库仍可正常解锁。</small>
+              </span>
+              <select id="kdfSelect">
+                <option value="argon2id">Argon2id（推荐）</option>
+                <option value="pbkdf2">PBKDF2-SHA512</option>
+              </select>
+            </label>
 
             <label class="select-row">
               <span>
@@ -337,7 +656,7 @@
             <label class="select-row">
               <span>
                 <strong>保存提示位置</strong>
-                <small>左上 / 右上 / 左下 / 右下 / 居中；居中模式会使用更大的提示框，并按窗口尺寸自适应。</small>
+                <small>左上 / 右上 / 左下 / 右下 / 居中；账号填入、保存成功等所有页面提示都会跟随此位置。</small>
               </span>
               <select id="savePromptPositionSelect">
                 <option value="top-right">右上</option>
@@ -345,6 +664,30 @@
                 <option value="bottom-left">左下</option>
                 <option value="bottom-right">右下</option>
                 <option value="center">居中</option>
+              </select>
+            </label>
+
+            <label class="select-row">
+              <span>
+                <strong>主题外观</strong>
+                <small>跟随系统 / 浅色 / 深色；同时影响扩展页面、popup 和网页内的填充提示。</small>
+              </span>
+              <select id="themeSelect">
+                <option value="system">跟随系统</option>
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+              </select>
+            </label>
+
+            <label class="select-row">
+              <span>
+                <strong>界面材质</strong>
+                <small>纯色 / 磨砂玻璃 / 液态玻璃；影响扩展页面、popup、账号选择框和页面提示。</small>
+              </span>
+              <select id="materialSelect">
+                <option value="solid">经典纯色</option>
+                <option value="glass">磨砂玻璃</option>
+                <option value="liquid">液态玻璃</option>
               </select>
             </label>
 
@@ -377,6 +720,15 @@
 
             <label class="switch-row">
               <span>
+                <strong>窗口失焦时自动隐藏内容</strong>
+                <small>切换到其他窗口、标签页或开发者工具时，用遮罩盖住密码库内容；点击遮罩即可继续。关闭后不再自动遮挡，适合频繁查看或调试时使用。</small>
+              </span>
+              <input id="privacyShieldToggle" type="checkbox" data-setting="privacyShieldOnBlur" />
+              <span class="switch"></span>
+            </label>
+
+            <label class="switch-row">
+              <span>
                 <strong>系统锁屏时立即锁定</strong>
                 <small>使用 chrome.idle 监听系统锁屏，锁屏后立刻清除内存密钥。</small>
               </span>
@@ -394,7 +746,7 @@
             </label>
           </div>
 
-          <div class="card">
+          <div class="card" id="takeoverCard">
             <div class="card-head">
               <div>
                 <h2>接管 Chrome 自带密码管理器</h2>
@@ -458,6 +810,15 @@
                 <span>新主密码</span>
                 <input id="newPassword" type="password" autocomplete="new-password" placeholder="至少 10 个字符" />
               </label>
+              <div class="strength">
+                <div class="strength-bar"><i id="newPasswordStrengthBar"></i></div>
+                <span id="newPasswordStrengthText">未输入</span>
+              </div>
+              <p class="fineprint" id="newPasswordHint" hidden></p>
+              <label class="check" id="newPasswordAckLabel" hidden>
+                <input id="newPasswordAck" type="checkbox" />
+                <span>我了解该主密码强度一般，仍要使用</span>
+              </label>
               <label class="field">
                 <span>确认新主密码</span>
                 <input id="confirmPassword" type="password" autocomplete="new-password" />
@@ -478,6 +839,203 @@
               <button id="wipeBtn" class="btn danger" type="button">清空密码库</button>
               <button id="resetBtn" class="btn danger-ghost" type="button">忘记主密码，重置</button>
             </div>
+          </div>
+        </section>
+
+        <section id="section-general" class="section" hidden>
+          <div class="card" id="vaultManageCard">
+            <div class="card-head">
+              <div>
+                <h2>密码库</h2>
+                <p>每套密码库有独立主密码与加密数据；本机最多 20 套。</p>
+              </div>
+              <span id="vaultActiveTag" class="tag">当前</span>
+            </div>
+            <div id="vaultManageList" class="vault-manage-list"></div>
+            <div class="inline-form">
+              <input id="newVaultName" type="text" maxlength="60" placeholder="新密码库名称" autocomplete="off" />
+              <input id="newVaultPassword" type="password" placeholder="新密码库主密码（至少 10 位）" autocomplete="new-password" />
+              <button id="newVaultCreateBtn" class="btn primary" type="button">新建密码库</button>
+            </div>
+            <p id="vaultManageError" class="form-error" hidden></p>
+            <div class="notice">切换或新建密码库会先锁定当前库。删除密码库需要再次输入该库主密码。</div>
+          </div>
+          <div class="card" id="profileManageCard">
+            <div class="card-head">
+              <div>
+                <h2>身份资料模板</h2>
+                <p>用于姓名、邮箱、电话、地址等非登录表单；在弹窗中选择模板后一键填充。</p>
+              </div>
+            </div>
+            <label class="field">
+              <span>模板</span>
+              <select id="profileSelectOptions">
+                <option value="">新建资料</option>
+              </select>
+            </label>
+            <div class="form-grid two">
+              <label class="field"><span>模板名称</span><input id="profileName" type="text" maxlength="60" placeholder="例如：个人资料" /></label>
+              <label class="field"><span>姓名</span><input id="profileFullName" type="text" maxlength="200" /></label>
+              <label class="field"><span>邮箱</span><input id="profileEmail" type="email" maxlength="200" /></label>
+              <label class="field"><span>电话</span><input id="profilePhone" type="tel" maxlength="60" /></label>
+              <label class="field"><span>公司</span><input id="profileCompany" type="text" maxlength="200" /></label>
+              <label class="field"><span>网站</span><input id="profileWebsite" type="url" maxlength="300" /></label>
+            </div>
+            <label class="field"><span>地址</span><textarea id="profileAddress" rows="2" maxlength="500"></textarea></label>
+            <label class="field"><span>备注</span><textarea id="profileNotes" rows="2" maxlength="2000"></textarea></label>
+            <div class="button-row">
+              <button id="profileSaveBtn" class="btn primary" type="button">保存资料模板</button>
+              <button id="profileDeleteBtn" class="btn danger-ghost" type="button" hidden>删除</button>
+            </div>
+            <p id="profileError" class="form-error" hidden></p>
+            <div class="notice">资料模板与账号一起加密保存在本机，不会上传。</div>
+          </div>
+        </section>
+
+        <section id="section-takeover" class="section" hidden></section>
+
+        <section id="section-sync" class="section" hidden></section>
+
+        <section id="section-share" class="section" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>一次性分享</h2>
+                <p>把选中的账号加密成 .svshare 文件，通过任意渠道交给另一台设备；文件本身不包含主密码，也不会联网。</p>
+              </div>
+            </div>
+            <label class="field">
+              <span>分享密码（至少 8 位，与主密码无关）</span>
+              <div class="secret-row">
+                <input id="sharePassword" type="password" autocomplete="new-password" />
+                <button id="shareGenerate" class="btn ghost" type="button" aria-label="生成强随机密码">生成</button>
+              </div>
+            </label>
+            <label class="select-row">
+              <span>
+                <strong>有效期</strong>
+                <small>过期后文件无法再导入；请通过可信渠道传递分享密码。</small>
+              </span>
+              <select id="shareExpiry">
+                <option value="1">1 天</option>
+                <option value="3">3 天</option>
+                <option value="7">7 天</option>
+              </select>
+            </label>
+            <div class="share-entry-head">
+              <div class="share-entry-title">
+                <strong>选择要分享的账号</strong>
+                <span class="tag"><span>已选择</span> <span id="shareSelectionCount">0 / 0</span></span>
+              </div>
+              <button id="shareSelectAllBtn" class="btn ghost" type="button">全选当前</button>
+            </div>
+            <div class="share-search">
+              <input id="shareSearch" type="search" placeholder="筛选名称、站点、用户名或标签" autocomplete="off" />
+            </div>
+            <div id="shareEntryList" class="share-entry-list"></div>
+            <p class="fineprint">未勾选条目不分享；导出前请确认已选择的数量。</p>
+            <div class="button-row">
+              <button id="shareExportBtn" class="btn primary" type="button">导出 .svshare</button>
+            </div>
+            <div class="divider"></div>
+            <label class="field">
+              <span>导入分享文件</span>
+              <input id="shareFile" type="file" accept=".svshare,application/json" />
+            </label>
+            <label class="field">
+              <span>分享密码</span>
+              <input id="shareImportPassword" type="password" autocomplete="off" />
+            </label>
+            <div class="button-row">
+              <button id="shareImportBtn" class="btn" type="button">解密并预览</button>
+            </div>
+            <p id="shareError" class="form-error" hidden></p>
+            <div class="notice">
+              分享文件用独立密码加密；导入后不会自动保存，仍会在预览中逐条确认。离线文件无法真正“阅后即焚”，请在过期后删除。
+            </div>
+          </div>
+
+          <div class="card" id="travelCard">
+            <div class="card-head">
+              <div>
+                <h2>旅行模式</h2>
+                <p>临时隐藏敏感账号，只保留旅行必需的登录信息。隐藏只是界面过滤，数据仍在加密库中，也不会同步隐藏状态。</p>
+              </div>
+            </div>
+            <label class="select-row">
+              <span>
+                <strong>启用旅行模式</strong>
+                <small>隐藏的账号不会出现在填充面板、密码库列表、搜索和角标中。</small>
+              </span>
+              <input id="travelEnabled" type="checkbox" />
+            </label>
+            <label class="select-row">
+              <span>
+                <strong>自动恢复</strong>
+                <small>到达设定时间后自动关闭旅行模式；关闭时仍可手动输入主密码。</small>
+              </span>
+              <select id="travelAutoRestore">
+                <option value="0">不自动恢复</option>
+                <option value="1">1 小时后</option>
+                <option value="4">4 小时后</option>
+                <option value="8">8 小时后</option>
+                <option value="24">24 小时后</option>
+                <option value="72">3 天后</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>隐藏站点（每行一个域名，包含其子域）</span>
+              <textarea id="travelHiddenHosts" rows="3" placeholder="example.com"></textarea>
+            </label>
+            <label class="field">
+              <span>隐藏标签（用逗号分隔）</span>
+              <input id="travelHiddenTags" type="text" placeholder="work, finance" />
+            </label>
+            <div class="share-entry-head">
+              <strong>选择要隐藏的账号</strong>
+              <button id="travelSelectAllBtn" class="btn ghost" type="button">全选</button>
+            </div>
+            <div id="travelEntryList" class="share-entry-list"></div>
+            <div class="button-row">
+              <button id="travelSaveBtn" class="btn primary" type="button">保存旅行模式</button>
+            </div>
+            <div id="travelDisableRow" class="divider-block" hidden>
+              <label class="field">
+                <span>关闭旅行模式需要主密码</span>
+                <input id="travelPassword" type="password" autocomplete="current-password" />
+              </label>
+              <div class="button-row">
+                <button id="travelDisableBtn" class="btn danger-ghost" type="button">关闭旅行模式</button>
+              </div>
+            </div>
+            <p id="travelStatus" class="muted-text"></p>
+            <p id="travelError" class="form-error" hidden></p>
+            <div class="notice">
+              旅行模式只在本机生效，不会同步到其他设备；已解锁的密码库仍包含隐藏条目，无法对抗持有主密码的攻击者。
+            </div>
+          </div>
+        </section>
+
+        <section id="section-language" class="section" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>语言与格式</h2>
+                <p>界面语言与日期、数字的显示格式。</p>
+              </div>
+            </div>
+            <label class="select-row">
+              <span>
+                <strong>界面语言</strong>
+                <small>仅影响扩展界面；跟随浏览器时会自动选择中文或英文。日期与数字会跟随该语言。</small>
+              </span>
+              <select id="uiLanguageSelect">
+                <option value="auto">跟随浏览器</option>
+                <option value="zh-CN">简体中文</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <p class="muted-text">日期时间：<span id="formatSample">—</span></p>
           </div>
         </section>
 
@@ -544,15 +1102,28 @@
           <div class="input-wrap">
             <input id="gateImportPassword" type="password" autocomplete="current-password" placeholder="已有密码库的主密码" />
           </div>
+          <label class="field">
+            <span>密钥文件（若已启用）</span>
+            <input id="gateImportKeyFile" type="file" />
+          </label>
           <button id="gateImportBtn" class="btn primary block" type="button">导入并解锁</button>
           <button id="gateImportBack" class="link-btn" type="button">返回</button>
         </form>
 
         <form id="gateUnlockForm" class="gate-form">
+          <label class="field" id="gateVaultRow" hidden>
+            <span>密码库</span>
+            <select id="gateVaultSelect"></select>
+          </label>
           <div class="input-wrap">
             <input id="gatePassword" type="password" autocomplete="current-password" placeholder="主密码" />
             <button class="reveal" type="button" data-target="gatePassword">显示</button>
           </div>
+          <label class="field" id="gateUnlockKeyFileRow" hidden>
+            <span>密钥文件</span>
+            <input id="gateUnlockKeyFile" type="file" />
+          </label>
+          <button id="gateDeviceUnlockBtn" class="btn ghost block" type="button" hidden>使用本机设备解锁</button>
           <button id="gateUnlockBtn" class="btn primary block" type="submit">解锁</button>
         </form>
 
@@ -561,12 +1132,29 @@
             <input id="gateNewPassword" type="password" autocomplete="new-password" placeholder="设置主密码（至少 10 个字符）" />
             <button class="reveal" type="button" data-target="gateNewPassword">显示</button>
           </div>
+          <div class="strength">
+            <div class="strength-bar"><i id="gateStrengthBar"></i></div>
+            <span id="gateStrengthText">未输入</span>
+          </div>
+          <p class="fineprint" id="gateStrengthHint" hidden></p>
           <div class="input-wrap">
             <input id="gateConfirmPassword" type="password" autocomplete="new-password" placeholder="确认主密码" />
           </div>
           <label class="check">
+            <input id="gateKeyFileToggle" type="checkbox" />
+            <span>同时使用密钥文件（可选）</span>
+          </label>
+          <label class="field" id="gateKeyFileRow" hidden>
+            <span>密钥文件</span>
+            <input id="gateKeyFile" type="file" />
+          </label>
+          <label class="check">
             <input id="gateAck" type="checkbox" />
             <span>我明白：忘记主密码将无法恢复密码库</span>
+          </label>
+          <label class="check" id="gateStrengthAckLabel" hidden>
+            <input id="gateStrengthAck" type="checkbox" />
+            <span>我了解该主密码强度一般，仍要使用</span>
           </label>
           <button id="gateSetupBtn" class="btn primary block" type="submit">创建本地密码库</button>
         </form>
@@ -612,6 +1200,22 @@
           <div class="strength-bar"><i id="entryStrengthBar"></i></div>
           <span id="entryStrengthText">未输入</span>
         </div>
+        <div class="form-grid two">
+          <label class="field">
+            <span>注册邮箱 / 别名（可选）</span>
+            <input id="entryAliasEmail" type="text" autocomplete="off" placeholder="alias@example.com" />
+          </label>
+          <label class="field">
+            <span>别名提供方（可选）</span>
+            <input id="entryAliasProvider" type="text" autocomplete="off" list="aliasProviders" placeholder="SimpleLogin" />
+            <datalist id="aliasProviders">
+              <option value="SimpleLogin"></option>
+              <option value="Firefox Relay"></option>
+              <option value="Proton"></option>
+              <option value="其他"></option>
+            </datalist>
+          </label>
+        </div>
         <div class="dialog-tools">
           <button id="entryGenerate" class="btn subtle" type="button">生成强密码</button>
           <span id="entryTimeLabel" class="muted-text"></span>
@@ -620,10 +1224,74 @@
           <span>备注（可选）</span>
           <textarea id="entryNotes" rows="3" placeholder="只保存在本机"></textarea>
         </label>
-        <label class="field">
-          <span>TOTP 密钥（可选，Base32）</span>
-          <input id="entryTotp" type="text" autocomplete="off" placeholder="例如 JBSWY3DPEHPK3PXP" />
+        <div class="form-grid two">
+          <label class="field">
+            <span>文件夹（可选）</span>
+            <input id="entryFolder" type="text" autocomplete="off" placeholder="例如 工作 / 个人" />
+          </label>
+          <label class="field">
+            <span>标签（可选，逗号分隔）</span>
+            <input id="entryTags" type="text" autocomplete="off" placeholder="例如 财务, 常用" />
+          </label>
+        </div>
+        <label class="check">
+          <input id="entryFavorite" type="checkbox" />
+          <span>收藏此账号（列表中优先显示）</span>
         </label>
+        <label class="field">
+          <span>TOTP 密钥、otpauth 链接或二维码</span>
+          <input id="entryTotp" type="text" autocomplete="off" placeholder="Base32 或 otpauth://totp/..." />
+        </label>
+        <div class="form-grid two">
+          <label class="field">
+            <span>填充序列模板</span>
+            <select id="entryFillPreset">
+              <option value="">默认：用户名 → 密码</option>
+              <option value="username">仅用户名（分步登录）</option>
+              <option value="username-wait-password">用户名 → 等待 300ms → 密码</option>
+              <option value="username-password-totp-enter">用户名 → 密码 → TOTP → Enter</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>自定义步骤（每行一个）</span>
+            <textarea id="entryFillSteps" rows="3" placeholder="username / password / totp / tab / enter / wait 300 / click #submit"></textarea>
+          </label>
+        </div>
+        <p class="muted-text">序列只执行预定义动作，不会运行页面脚本；“按 Enter”需在通用设置中允许。</p>
+        <div class="button-row">
+          <button id="entryTotpQrBtn" class="btn subtle" type="button">从二维码图片导入</button>
+          <input id="entryTotpQrFile" type="file" accept="image/*" hidden />
+          <span id="entryTotpHint" class="muted-text"></span>
+        </div>
+        <div class="passkey-box">
+          <div class="passkey-head">
+            <h4>Passkey（仅记录）</h4>
+            <button id="entryPasskeyClear" class="btn subtle" type="button">清除</button>
+          </div>
+          <p class="muted-text">
+            Chrome 扩展无法创建或使用 Passkey 私钥，这里只保存凭据 ID 与备注，随密码库加密和备份，不会同步到网站。
+          </p>
+          <div class="form-grid two">
+            <label class="field">
+              <span>凭据 ID（可选）</span>
+              <input id="entryPasskeyCredential" type="text" autocomplete="off" placeholder="credential-id" />
+            </label>
+            <label class="field">
+              <span>RP ID / 网站</span>
+              <input id="entryPasskeyRp" type="text" autocomplete="off" placeholder="example.com" />
+            </label>
+          </div>
+          <div class="form-grid two">
+            <label class="field">
+              <span>Passkey 账号（可选）</span>
+              <input id="entryPasskeyUsername" type="text" autocomplete="off" placeholder="账号或邮箱" />
+            </label>
+            <label class="field">
+              <span>备注（可选）</span>
+              <input id="entryPasskeyNote" type="text" autocomplete="off" placeholder="例如：Windows Hello / 安全密钥" />
+            </label>
+          </div>
+        </div>
         <p id="entryError" class="form-error" hidden></p>
       </div>
       <div class="dialog-actions">
@@ -662,6 +1330,7 @@
       </div>
       <div class="dialog-body totp-body">
         <div id="totpCode" class="totp-code">------</div>
+        <div class="totp-progress" aria-hidden="true"><div id="totpProgressBar"></div></div>
         <div id="totpMeta" class="muted-text"></div>
         <div class="button-row">
           <button id="totpCopyBtn" class="btn primary" type="button">复制动态码</button>
@@ -679,6 +1348,13 @@
         <div id="historyList" class="history-list"></div>
       </div>
     </dialog>
+
+    <div id="privacyShield" class="privacy-shield" hidden>
+      <div class="privacy-shield-card">
+        <strong>内容已隐藏</strong>
+        <span>切换回本页后点击任意位置继续</span>
+      </div>
+    </div>
 
     <script type="module" src="options.js"></script>
   </body>

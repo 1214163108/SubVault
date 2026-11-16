@@ -1,4 +1,4 @@
-/** RFC 6238 TOTP helpers (HMAC-SHA1, 6/8 digits, 30s period). */
+/** RFC 6238 TOTP helpers (SHA-1/256/512, 6/8 digits, configurable period). */
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -7,6 +7,48 @@ export function normalizeTotpSecret(value) {
     .toUpperCase()
     .replace(/[\s-]/g, '')
     .replace(/=+$/g, '');
+}
+
+/**
+ * Parse an otpauth://totp/... URI. Returns null for plain Base32/empty input.
+ */
+export function parseOtpAuthUri(value) {
+  const raw = String(value || '').trim();
+  if (!/^otpauth:\/\//i.test(raw)) return null;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('Invalid otpauth URL');
+  }
+  if (url.hostname.toLowerCase() !== 'totp') {
+    throw new Error('Only otpauth://totp is supported');
+  }
+  const secret = normalizeTotpSecret(url.searchParams.get('secret') || '');
+  if (!isValidTotpSecret(secret)) throw new Error('otpauth secret must be valid Base32');
+  const digits = Number(url.searchParams.get('digits')) === 8 ? 8 : 6;
+  const period = Math.min(300, Math.max(10, Number(url.searchParams.get('period')) || 30));
+  const algorithm = String(url.searchParams.get('algorithm') || 'SHA1').toUpperCase();
+  if (!['SHA1', 'SHA256', 'SHA512'].includes(algorithm)) {
+    throw new Error('Unsupported otpauth algorithm');
+  }
+  const label = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  const issuer = url.searchParams.get('issuer') || label.split(':')[0] || '';
+  return {
+    secret,
+    digits,
+    period,
+    algorithm,
+    issuer,
+    account: label.includes(':') ? label.slice(label.indexOf(':') + 1) : label,
+  };
+}
+
+export function totpAlgorithmToHash(algorithm) {
+  const value = String(algorithm || 'SHA1').toUpperCase();
+  if (value === 'SHA256') return 'SHA-256';
+  if (value === 'SHA512') return 'SHA-512';
+  return 'SHA-1';
 }
 
 export function isValidTotpSecret(value) {
@@ -22,7 +64,7 @@ export function base32Decode(value) {
   const bytes = [];
   for (const char of secret) {
     const index = BASE32_ALPHABET.indexOf(char);
-    if (index === -1) throw new Error('TOTP 密钥不是有效的 Base32');
+    if (index === -1) throw new Error('TOTP secret is not valid Base32');
     buffer = (buffer << 5) | index;
     bits += 5;
     if (bits >= 8) {
@@ -45,22 +87,23 @@ function counterBytes(counter) {
 
 /**
  * @param {string} secret Base32
- * @param {{period?: number, digits?: number, now?: number}} [options]
+ * @param {{period?: number, digits?: number, algorithm?: string, now?: number}} [options]
  */
 export async function generateTotp(secret, options = {}) {
-  if (!isValidTotpSecret(secret)) throw new Error('TOTP 密钥格式无效');
+  if (!isValidTotpSecret(secret)) throw new Error('Invalid TOTP secret');
   const period = Math.min(300, Math.max(10, Number(options.period) || 30));
   const digits = options.digits === 8 ? 8 : 6;
+  const hash = totpAlgorithmToHash(options.algorithm);
   const now = Number(options.now) || Date.now();
   const seconds = Math.floor(now / 1000);
   const counter = Math.floor(seconds / period);
   const keyBytes = base32Decode(secret);
-  if (keyBytes.length === 0) throw new Error('TOTP 密钥为空');
+  if (keyBytes.length === 0) throw new Error('TOTP secret is empty');
 
   const key = await crypto.subtle.importKey(
     'raw',
     keyBytes,
-    { name: 'HMAC', hash: 'SHA-1' },
+    { name: 'HMAC', hash },
     false,
     ['sign'],
   );

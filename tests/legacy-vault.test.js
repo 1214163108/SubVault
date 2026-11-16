@@ -81,13 +81,21 @@ function send(message) {
   });
 }
 
-test('legacy SHA-256 vault unlocks and upgrades to SHA-512', async () => {
+test('legacy SHA-256 vault unlocks and upgrades to v4 with Argon2id VaultKey', async () => {
   const result = await send({ type: 'SV_UNLOCK', password });
   assert.equal(result.ok, true);
   assert.equal(result.upgradedKdf, true);
+  assert.equal(result.migrated, true);
+  assert.equal(result.format, 4);
 
   const blob = local.get('vault');
-  assert.equal(blob.kdf.hash, 'SHA-512');
+  assert.equal(blob.v, 4);
+  assert.equal(blob.cipher, 'AES-GCM');
+  assert.ok(blob.wrappedKey?.iv);
+  assert.ok(blob.wrappedKey?.data);
+  assert.equal(blob.kdf.algo, 'ARGON2ID');
+  assert.equal(blob.kdf.memorySize, 65536);
+  assert.equal(blob.kdf.iterations, 3);
   assert.equal(atob(blob.kdf.salt).length, 32);
   assert.notEqual(blob.kdf.salt, legacySalt);
 
@@ -95,4 +103,45 @@ test('legacy SHA-256 vault unlocks and upgrades to SHA-512', async () => {
   const second = await send({ type: 'SV_UNLOCK', password });
   assert.equal(second.ok, true);
   assert.equal(second.upgradedKdf, false);
+  assert.equal(second.migrated, false);
+  assert.equal(second.format, 4);
+
+  const status = await send({ type: 'SV_GET_MIGRATION_STATUS' });
+  assert.equal(status.ok, true);
+  assert.equal(status.currentVersion, 4);
+  assert.equal(status.exists, true);
+  assert.equal(status.fromVersion, 1);
+
+  const rollback = await send({ type: 'SV_ROLLBACK_MIGRATION', password });
+  assert.equal(rollback.ok, true);
+  assert.equal(rollback.version, 1);
+  assert.equal(local.get('vault').v, 1);
+  assert.equal(local.has('vaultBackup:default'), false);
+
+  const remigrate = await send({ type: 'SV_UNLOCK', password });
+  assert.equal(remigrate.ok, true);
+  assert.equal(remigrate.migrated, true);
+  assert.equal(local.get('vault').v, 4);
+
+  const boxBefore = structuredClone(local.get('vault').box);
+  const wrappedBefore = local.get('vault').wrappedKey;
+  const nextPassword = 'New-Vault-Key-2026!Qm7#';
+  const changed = await send({
+    type: 'SV_CHANGE_MASTER',
+    currentPassword: password,
+    newPassword: nextPassword,
+  });
+  assert.equal(changed.ok, true);
+  assert.equal(changed.rewrapped, true);
+  const afterRewrap = local.get('vault');
+  assert.equal(afterRewrap.v, 4);
+  assert.deepEqual(afterRewrap.box, boxBefore);
+  assert.notDeepEqual(afterRewrap.wrappedKey, wrappedBefore);
+
+  await send({ type: 'SV_LOCK' });
+  const oldRejected = await send({ type: 'SV_UNLOCK', password });
+  assert.equal(oldRejected.ok, false);
+  const newAccepted = await send({ type: 'SV_UNLOCK', password: nextPassword });
+  assert.equal(newAccepted.ok, true);
+  assert.equal(newAccepted.migrated, false);
 });

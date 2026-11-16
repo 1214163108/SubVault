@@ -18,6 +18,9 @@ for (const rule of PSL_RULES) {
   else PSL_EXACT.add(rule);
 }
 
+let CUSTOM_PSL_COUNT = 0;
+const CUSTOM_PSL_ADDED = [];
+
 const SECOND_LEVEL_SUFFIXES = new Set([
   'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'ltd.uk', 'plc.uk',
   'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
@@ -153,6 +156,59 @@ export function suggestBaseDomain(input) {
   const lastTwo = labels.slice(-2).join('.');
   if (SECOND_LEVEL_SUFFIXES.has(lastTwo)) return labels.slice(-3).join('.');
   return lastTwo;
+}
+
+/**
+ * Merge user-supplied Public Suffix List text (e.g. an updated official list)
+ * into the in-memory rules. Lines follow the PSL format: comments start with
+ * `//`, wildcard `*.` and exception `!` prefixes are supported.
+ * @param {string} text
+ * @returns {number} number of accepted rules
+ */
+export function addCustomPslRules(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  let added = 0;
+  for (const raw of lines) {
+    const line = raw.trim().toLowerCase();
+    if (!line || line.startsWith('//')) continue;
+    const rule = line.replace(/\s+/g, '');
+    if (!/^!?[a-z0-9.*-]+$/.test(rule) || rule.length > 253) continue;
+    let set;
+    let value;
+    if (rule.startsWith('!')) {
+      set = PSL_EXCEPTION;
+      value = rule.slice(1);
+    } else if (rule.startsWith('*.')) {
+      set = PSL_WILDCARD;
+      value = rule.slice(2);
+    } else {
+      set = PSL_EXACT;
+      value = rule;
+    }
+    if (!set.has(value)) {
+      set.add(value);
+      CUSTOM_PSL_ADDED.push({ set, value });
+    }
+    added += 1;
+  }
+  CUSTOM_PSL_COUNT = CUSTOM_PSL_ADDED.length;
+  return added;
+}
+
+/**
+ * Remove every rule added through addCustomPslRules(). Built-in PSL entries
+ * are untouched.
+ */
+export function clearCustomPslRules() {
+  for (const { set, value } of CUSTOM_PSL_ADDED) set.delete(value);
+  CUSTOM_PSL_ADDED.length = 0;
+  CUSTOM_PSL_COUNT = 0;
+  return 0;
+}
+
+/** Count of user-added rules, for the settings UI. */
+export function customPslRuleCount() {
+  return CUSTOM_PSL_COUNT;
 }
 
 /** True when `host` is exactly `domain` or a subdomain of it. */

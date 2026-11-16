@@ -8,10 +8,187 @@
     autoOpenOnFocus: false,
     savePrompt: true,
     savePromptPosition: 'top-right',
+    theme: 'system',
+    material: 'solid',
     showIcon: true,
     takeoverMode: true,
     clearNativeAutofill: true,
+    uiLanguage: 'auto',
   };
+
+  const UI_EN = {
+    '保存新账号': 'Save new account',
+    '更新登录密码': 'Update login password',
+    '填充登录信息': 'Fill login',
+    '独立子域': 'Isolated subdomain',
+    '主域共享': 'Shared main domain',
+    '没有匹配的账号': 'No matching accounts',
+    '当前网站还没有保存的账号': 'No accounts saved for this site yet',
+    '填充': 'Fill',
+    '保存': 'Save',
+    '暂不': 'Not now',
+    '此网站不再提示': "Don't ask on this site",
+    '去解锁': 'Unlock',
+    '@ 使用别名': '@ Use alias',
+    '使用别名邮箱': 'Use alias email',
+    '已保存的别名邮箱': 'Saved alias emails',
+    '点击复制别名邮箱（不会自动填入）': 'Click to copy an alias email (never auto-filled)',
+    '还没有保存的别名': 'No saved aliases yet',
+    '在账号条目中填写“注册邮箱/别名”后即可使用': 'Add “Signup email / alias” to an account to use it here',
+    '已复制别名邮箱': 'Alias email copied',
+    '已保存别名': 'Saved alias',
+    '创建密码库': 'Create vault',
+    '密码库已锁定': 'Vault is locked',
+    '还没有密码库': 'No vault yet',
+    '保存账号': 'Save account',
+    '更新账号': 'Update account',
+    '更新': 'Update',
+    '新增': 'New',
+    '已生成强密码': 'Strong password generated',
+    '请在完成注册后保存到 SubVault': 'Save it to SubVault after finishing sign-up',
+    '此网站将不再提示保存': "This site will no longer prompt to save",
+    '没有找到可填充的登录框': 'No fillable login field found',
+    '没有找到可填写的登录框': 'No fillable login field found',
+    '已接管浏览器自动填充，请用钥匙选择 SubVault 账号':
+      'Autofill taken over — use the key button to pick a SubVault account',
+    '保存失败': 'Save failed',
+    '已复制密码': 'Password copied',
+    '已复制用户名': 'Username copied',
+    '复制失败': 'Copy failed',
+    '已填入账号': 'Filled account',
+    '账号': 'Account',
+    '关闭': 'Close',
+    '生成强密码并填入': 'Generate a strong password and fill it',
+    '用 SubVault 填充密码': 'Fill with SubVault',
+    'SubVault 账号列表': 'SubVault accounts',
+    '账号列表': 'Accounts',
+    '管理密码库': 'Manage vault',
+    '记录于': 'Recorded',
+    '此网站还没有保存的账号': 'No accounts saved for this site yet',
+  };
+  const textOriginals = new WeakMap();
+  const attributeOriginals = new WeakMap();
+
+  function detectEnglish() {
+    try {
+      const language = String(chrome?.i18n?.getUILanguage?.() || 'zh');
+      return !language.toLowerCase().startsWith('zh');
+    } catch {
+      return false;
+    }
+  }
+
+  let UI_ENGLISH = detectEnglish();
+
+  function applyUiLanguage(preference) {
+    if (preference === 'en') UI_ENGLISH = true;
+    else if (preference === 'zh-CN' || preference === 'zh') UI_ENGLISH = false;
+    else UI_ENGLISH = detectEnglish();
+    if (shadow) localizeNode(shadow);
+  }
+
+  function tr(text) {
+    if (!UI_ENGLISH) return text;
+    const hit = UI_EN[String(text).trim()];
+    return hit ? String(text).replace(String(text).trim(), hit) : text;
+  }
+
+  function localizeNode(root) {
+    if (!root) return;
+    try {
+      const walker = document.createTreeWalker(root, 4);
+      const nodes = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+      if (!UI_ENGLISH) {
+        for (const node of nodes) {
+          const original = textOriginals.get(node);
+          if (original != null && node.nodeValue !== original) node.nodeValue = original;
+        }
+        for (const element of root.querySelectorAll?.(
+          '[placeholder], [title], [aria-label], [alt]',
+        ) || []) {
+          const originals = attributeOriginals.get(element);
+          if (!originals) continue;
+          for (const attr of ['placeholder', 'title', 'aria-label', 'alt']) {
+            if (!(attr in originals)) continue;
+            if (element.getAttribute?.(attr) !== originals[attr]) {
+              element.setAttribute(attr, originals[attr]);
+            }
+          }
+        }
+        return;
+      }
+      for (const node of nodes) {
+        const parent = node.parentElement;
+        if (parent && (parent.closest('[data-i18n-raw]') || ['SCRIPT', 'STYLE', 'CODE'].includes(parent.tagName))) {
+          continue;
+        }
+        const current = node.nodeValue;
+        if (!current) continue;
+        const original = textOriginals.get(node) ?? current;
+        if (!/[一-鿿]/.test(original)) continue;
+        const key = original.trim();
+        let translated = UI_EN[key];
+        if (!translated) {
+          // Prefix entries such as 记录于 + timestamp.
+          let best = '';
+          for (const candidate of Object.keys(UI_EN)) {
+            if (candidate.length >= 2 && key.startsWith(candidate) && /\s/.test(key.charAt(candidate.length))) {
+              if (candidate.length > best.length) best = candidate;
+            }
+          }
+          if (best) translated = UI_EN[best] + key.slice(best.length);
+        }
+        if (!translated) continue;
+        if (!textOriginals.has(node)) textOriginals.set(node, current);
+        const next = original.replace(key, translated);
+        if (next !== current) node.nodeValue = next;
+      }
+      for (const element of root.querySelectorAll?.(
+        '[placeholder], [title], [aria-label], [alt]',
+      ) || []) {
+        for (const attr of ['placeholder', 'title', 'aria-label', 'alt']) {
+          const current = element.getAttribute?.(attr);
+          if (!current || !/[一-鿿]/.test(current)) continue;
+          let originals = attributeOriginals.get(element);
+          if (!originals) {
+            originals = Object.create(null);
+            attributeOriginals.set(element, originals);
+          }
+          const original = originals[attr] ?? current;
+          const key = original.trim();
+          const hit = UI_EN[key];
+          if (!hit) continue;
+          if (!(attr in originals)) originals[attr] = current;
+          const next = original.replace(key, hit);
+          if (next !== current) element.setAttribute(attr, next);
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  function installLocalization(root) {
+    if (!UI_ENGLISH || !root) return;
+    localizeNode(root);
+    let scheduled = false;
+    const observer = new MutationObserver(() => {
+      if (scheduled) return;
+      scheduled = true;
+      queueMicrotask(() => {
+        scheduled = false;
+        localizeNode(root);
+      });
+    });
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['placeholder', 'title', 'aria-label', 'alt'],
+    });
+  }
 
   const state = {
     host: location.hostname.toLowerCase().replace(/\.$/, ''),
@@ -19,6 +196,7 @@
     isolated: false,
     settings: { ...DEFAULTS },
     settingsLoaded: false,
+    settingsVersion: 0,
     matches: [],
     matchesAt: 0,
     matchesHost: '',
@@ -29,6 +207,7 @@
     search: '',
     activeIndex: 0,
     anchorField: null,
+    genField: null,
     autoOpened: new WeakSet(),
     banner: null,
     pendingQueue: [],
@@ -410,10 +589,13 @@
 
   async function getSettings() {
     if (state.settingsLoaded) return state.settings;
+    const version = state.settingsVersion;
     const result = await send('SV_GET_SETTINGS');
+    if (version !== state.settingsVersion) return state.settings;
     if (result.ok && result.settings) {
       state.settings = { ...DEFAULTS, ...result.settings };
       state.settingsLoaded = true;
+      applyUiLanguage(state.settings.uiLanguage);
     }
     return state.settings;
   }
@@ -453,6 +635,117 @@
     return state.matches;
   }
 
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+  }
+
+  function tabToNext(field) {
+    const inputs = collectInputs(document).filter(
+      (input) => input instanceof HTMLInputElement && !input.disabled && !input.readOnly && isVisible(input),
+    );
+    const index = inputs.indexOf(field);
+    if (index >= 0 && inputs[index + 1]) {
+      inputs[index + 1].focus({ preventScroll: true });
+      return true;
+    }
+    return false;
+  }
+
+  async function runFillSequence(result, passwordField, usernameField) {
+    const sequence = Array.isArray(result.fillSequence) ? result.fillSequence : [];
+    for (const step of sequence) {
+      if (step.type === 'username') {
+        if (usernameField && result.username) setNativeValue(usernameField, result.username);
+        usernameField?.focus?.({ preventScroll: true });
+      } else if (step.type === 'password') {
+        if (passwordField && result.password) setNativeValue(passwordField, result.password);
+        passwordField?.focus?.({ preventScroll: true });
+      } else if (step.type === 'totp' && result.totpCode && passwordField) {
+        const otpField = findOtpField(passwordField);
+        if (otpField) setNativeValue(otpField, result.totpCode);
+      } else if (step.type === 'wait') {
+        await sleep(step.ms);
+      } else if (step.type === 'tab') {
+        tabToNext(document.activeElement);
+      } else if (step.type === 'enter') {
+        if (state.settings?.allowSequenceSubmit !== true) {
+          showToast('序列已暂停', '“按 Enter”需要在设置中允许后才会执行');
+          break;
+        }
+        const active = document.activeElement;
+        const form = active?.closest?.('form');
+        if (form?.requestSubmit) form.requestSubmit();
+        else {
+          active?.dispatchEvent?.(
+            new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }),
+          );
+        }
+      } else if (step.type === 'click' && step.selector) {
+        try {
+          document.querySelector(step.selector)?.click?.();
+        } catch {
+          /* invalid or detached selector: skip the step */
+        }
+      }
+    }
+  }
+
+  async function fillProfileById(id) {
+    const result = await send('SV_GET_PROFILE', { id });
+    if (!result.ok) {
+      if (isLockedError(result.error)) showLockedHint();
+      else showToast(result.error || '资料填充失败');
+      return false;
+    }
+    const profile = result.profile || {};
+    const buckets = [
+      { value: profile.fullName, keys: ['fullname', 'full-name', 'realname', '真实姓名', '姓名', 'displayname', 'display-name'] },
+      { value: profile.email, keys: ['email', 'e-mail', '邮箱', '邮件地址'] },
+      { value: profile.phone, keys: ['tel', 'phone', 'mobile', '手机', '电话'] },
+      { value: profile.address, keys: ['street-address', 'address', '地址', '详细地址'] },
+      { value: profile.company, keys: ['organization', 'company', '公司', '单位'] },
+      { value: profile.website, keys: ['website', '网址'] },
+    ];
+    let filled = 0;
+    const candidates = [...collectInputs(document), ...document.querySelectorAll('textarea')];
+    for (const input of candidates) {
+      if (!isVisible(input) || input.disabled || input.readOnly) continue;
+      const type = String(input.type || '').toLowerCase();
+      if (['password', 'hidden', 'checkbox', 'radio', 'file', 'submit', 'button', 'image'].includes(type)) continue;
+      const hay = [
+        input.getAttribute('autocomplete'),
+        input.getAttribute('name'),
+        input.id,
+        input.getAttribute('placeholder'),
+        input.getAttribute('aria-label'),
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!hay) continue;
+      const bucket = buckets.find((item) => item.value && item.keys.some((key) => hay.includes(key)));
+      if (!bucket) continue;
+      setNativeValue(input, bucket.value);
+      filled += 1;
+    }
+    for (const field of Array.isArray(profile.fields) ? profile.fields : []) {
+      if (!field?.label || !field?.value) continue;
+      let element = null;
+      try {
+        element = document.querySelector(field.label);
+      } catch {
+        element = null;
+      }
+      if (element && typeof element.value !== 'undefined') {
+        setNativeValue(element, field.value);
+        filled += 1;
+      }
+    }
+    if (!filled) {
+      showToast('没有找到可填入的资料字段');
+      return false;
+    }
+    showToast(profile.name || '身份资料', '已填入资料');
+    return true;
+  }
+
   async function fillById(id, { silent = false } = {}) {
     const passwordField = pickPasswordField();
     const usernameFallback = passwordField
@@ -471,23 +764,66 @@
       return false;
     }
 
+    const usernameField = passwordField
+      ? findUsernameField(passwordField)
+      : usernameFallback || firstUsernameField();
+    if (Array.isArray(result.fillSequence) && result.fillSequence.length > 0) {
+      await runFillSequence(result, passwordField, usernameField);
+      hidePanel();
+      hideTrigger();
+      if (!silent) showToast(result.username || '当前账号', '已按填充序列执行');
+      return true;
+    }
+
     if (!passwordField && usernameFallback) {
       setNativeValue(usernameFallback, result.username);
       usernameFallback.focus({ preventScroll: true });
       hidePanel();
       hideTrigger();
-      if (!silent) showToast('已填充用户名，请继续输入密码');
+      if (!silent) showToast(result.username || '当前账号', '已填入用户名');
       return true;
     }
 
-    const usernameField = findUsernameField(passwordField);
     if (usernameField && result.username) setNativeValue(usernameField, result.username);
+    if (!result.password) {
+      hidePanel();
+      hideTrigger();
+      if (!silent) showToast(result.username || result.title || '当前账号', '该账号仅保存了 Passkey 记录，请使用系统 Passkey 登录');
+      return true;
+    }
     setNativeValue(passwordField, result.password);
+    let otpFilled = false;
+    if (result.totpCode) {
+      const otpField = findOtpField(passwordField);
+      if (otpField) {
+        setNativeValue(otpField, result.totpCode);
+        otpFilled = true;
+      }
+    }
     passwordField.focus({ preventScroll: true });
     hidePanel();
     hideTrigger();
-    if (!silent) showToast(`已填充${result.title ? `：${result.title}` : ''}`);
+    if (!silent) {
+      const account = result.username || result.title || '当前账号';
+      const detail = result.title && result.title !== account
+        ? `已填入账号 · ${result.title}`
+        : '已填入账号';
+      showToast(account, otpFilled ? `${detail}和动态码` : detail);
+    }
     return true;
+  }
+
+  function findOtpField(passwordField) {
+    const form = passwordField?.closest?.('form');
+    const candidates = form ? collectInputs(form) : collectInputs(document);
+    return candidates.find(
+      (input) =>
+        input instanceof HTMLInputElement &&
+        !input.disabled &&
+        !input.readOnly &&
+        looksLikeOtp(input) &&
+        isVisible(input),
+    ) || null;
   }
 
   function pickPasswordField() {
@@ -532,6 +868,48 @@
     .sv-trigger:hover { transform: translateY(-1px) scale(1.04); box-shadow: 0 6px 16px rgba(79,70,229,.48); }
     .sv-trigger:active { transform: scale(.96); }
     .sv-trigger svg { width: 16px; height: 16px; }
+
+    .sv-gen {
+      position: fixed; height: 28px; padding: 0 10px 0 8px;
+      display: flex; align-items: center; gap: 5px;
+      border: 1px solid rgba(79,70,229,.28); border-radius: 9px;
+      background: #fff; color: #4338ca; cursor: pointer; pointer-events: auto;
+      font-size: 12px; font-weight: 600; line-height: 1; white-space: nowrap;
+      box-shadow: 0 4px 14px rgba(15,23,42,.14);
+      transition: transform .12s ease, box-shadow .12s ease;
+    }
+    .sv-gen:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(15,23,42,.18); }
+    .sv-gen:active { transform: scale(.97); }
+    .sv-gen svg { width: 14px; height: 14px; }
+    :host([data-theme="dark"]) .sv-gen { background: #1e293b; color: #c7d2fe; border-color: rgba(129,140,248,.4); }
+
+    .sv-alias {
+      position: fixed; height: 28px; padding: 0 10px 0 8px;
+      display: flex; align-items: center; gap: 5px;
+      border: 1px solid rgba(14,116,144,.26); border-radius: 9px;
+      background: #fff; color: #0e7490; cursor: pointer; pointer-events: auto;
+      font-size: 12px; font-weight: 600; line-height: 1; white-space: nowrap;
+      box-shadow: 0 4px 14px rgba(15,23,42,.14);
+      transition: transform .12s ease, box-shadow .12s ease;
+    }
+    .sv-alias:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(15,23,42,.18); }
+    :host([data-theme="dark"]) .sv-alias { background: #0f2a36; color: #67e8f9; border-color: rgba(34,211,238,.4); }
+    .sv-alias-panel {
+      position: fixed; width: min(292px, calc(100vw - 16px)); max-height: 260px;
+      overflow: auto; pointer-events: auto; border-radius: 12px; padding: 8px;
+      background: #fff; color: #0f172a; border: 1px solid rgba(15,23,42,.10);
+      box-shadow: 0 18px 48px rgba(15,23,42,.20); z-index: 5;
+    }
+    :host([data-theme="dark"]) .sv-alias-panel { background: #0b1220; color: #e5e7eb; border-color: rgba(148,163,184,.22); }
+    .sv-alias-head { font-size: 11px; font-weight: 700; color: #64748b; padding: 4px 6px 8px; }
+    .sv-alias-item {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+      width: 100%; padding: 7px 8px; border: 0; border-radius: 8px;
+      background: transparent; color: inherit; cursor: pointer; text-align: left;
+    }
+    .sv-alias-item:hover { background: rgba(99,102,241,.10); }
+    .sv-alias-email { font-size: 12px; font-weight: 600; }
+    .sv-alias-provider { font-size: 10px; color: #64748b; }
 
     .sv-panel {
       position: fixed; width: min(324px, calc(100vw - 16px)); max-height: 372px;
@@ -612,7 +990,8 @@
       padding: 18px 18px 16px;
       animation: svBannerCenterIn .18s ease-out;
     }
-    .sv-banner.pos-center .sv-banner-title { font-size: 15px; }
+    .sv-banner.pos-center .sv-banner-kicker { font-size: 11px; }
+    .sv-banner.pos-center .sv-banner-title { font-size: 18px; }
     .sv-banner.pos-center .sv-banner-sub { font-size: 12.5px; }
     .sv-banner.pos-center .sv-btn { padding: 7px 15px; font-size: 12.5px; }
     @keyframes svBannerIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
@@ -622,16 +1001,20 @@
     }
     .sv-banner-top { display: flex; align-items: flex-start; gap: 10px; }
     .sv-logo {
-      width: 34px; height: 34px; border-radius: 10px; flex: none;
+      width: 36px; height: 36px; border-radius: 11px; flex: none;
       display: flex; align-items: center; justify-content: center;
       background: linear-gradient(135deg,#4f46e5,#7c3aed);
       color: #fff; font-size: 15px; font-weight: 800;
       box-shadow: inset 0 1px 0 rgba(255,255,255,.26);
     }
     .sv-banner-copy { min-width: 0; flex: 1; padding-top: 1px; }
-    .sv-banner-title { font-size: 13.5px; font-weight: 700; color: #0f172a; }
-    .sv-banner-sub { font-size: 11.5px; color: #64748b; margin-top: 3px; line-height: 1.45; word-break: break-all; }
-    .sv-banner-actions { display: flex; align-items: center; gap: 7px; margin-top: 11px; padding-left: 44px; flex-wrap: wrap; }
+    .sv-banner-title { font-size: 16px; font-weight: 750; color: #0f172a; line-height: 1.25; }
+    .sv-banner-kicker {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: #6366f1; margin-bottom: 3px;
+    }
+    .sv-banner-sub { font-size: 11.5px; color: #64748b; margin-top: 4px; line-height: 1.45; word-break: break-all; }
+    .sv-banner-actions { display: flex; align-items: center; gap: 7px; margin-top: 12px; padding-left: 46px; flex-wrap: wrap; }
     .sv-btn {
       border: 0; border-radius: 8px; padding: 6px 13px; font-size: 12px;
       font-weight: 650; cursor: pointer; line-height: 1.35;
@@ -645,15 +1028,31 @@
     .sv-banner-actions .sv-ignore:hover { color: #64748b; }
 
     .sv-toast {
-      position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
-      max-width: min(420px, calc(100vw - 32px));
+      position: fixed; max-width: min(460px, calc(100vw - 32px));
       background: rgba(15,23,42,.94); color: #f8fafc;
-      font-size: 12px; padding: 8px 14px; border-radius: 999px;
+      font-size: 12px; padding: 10px 14px; border-radius: 12px;
       box-shadow: 0 10px 30px rgba(15,23,42,.28);
-      pointer-events: none; animation: svToastIn .16s ease-out;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      pointer-events: none; line-height: 1.45;
+      overflow-wrap: anywhere; text-align: left;
     }
-    @keyframes svToastIn { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+    .sv-toast-title { font-size: 12.5px; font-weight: 700; color: #fff; }
+    .sv-toast-detail { font-size: 10.5px; color: rgba(248,250,252,.72); margin-top: 2px; }
+    .sv-toast.is-error { background: #b91c1c; }
+    .sv-toast.pos-top-left { top: 16px; left: 16px; right: auto; bottom: auto; animation: svToastCornerIn .16s ease-out; }
+    .sv-toast.pos-top-right { top: 16px; right: 16px; left: auto; bottom: auto; animation: svToastCornerIn .16s ease-out; }
+    .sv-toast.pos-bottom-left { bottom: 16px; left: 16px; right: auto; top: auto; animation: svToastCornerIn .16s ease-out; }
+    .sv-toast.pos-bottom-right { bottom: 16px; right: 16px; left: auto; top: auto; animation: svToastCornerIn .16s ease-out; }
+    .sv-toast.pos-center {
+      top: 50%; left: 50%; right: auto; bottom: auto;
+      transform: translate(-50%, -50%);
+      max-width: min(460px, calc(100vw - 32px));
+      animation: svToastCenterIn .16s ease-out;
+    }
+    @keyframes svToastCornerIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    @keyframes svToastCenterIn {
+      from { opacity: 0; transform: translate(-50%, -46%); }
+      to { opacity: 1; transform: translate(-50%, -50%); }
+    }
 
     @media (prefers-color-scheme: dark) {
       .sv-layer { color: #e2e8f0; }
@@ -668,6 +1067,98 @@
       .sv-empty { color: #64748b; }
       .sv-fill-hint { color: #a5b4fc; }
     }
+
+    :host([data-theme="dark"]) .sv-layer { color: #e2e8f0; }
+    :host([data-theme="dark"]) .sv-panel,
+    :host([data-theme="dark"]) .sv-banner { background: #111827; border-color: rgba(255,255,255,.1); }
+    :host([data-theme="dark"]) .sv-panel-head,
+    :host([data-theme="dark"]) .sv-panel-foot { border-color: rgba(255,255,255,.08); }
+    :host([data-theme="dark"]) .sv-head-title,
+    :host([data-theme="dark"]) .sv-banner-title,
+    :host([data-theme="dark"]) .sv-item-title { color: #f1f5f9; }
+    :host([data-theme="dark"]) .sv-head-sub,
+    :host([data-theme="dark"]) .sv-banner-sub,
+    :host([data-theme="dark"]) .sv-item-sub,
+    :host([data-theme="dark"]) .sv-panel-foot { color: #94a3b8; }
+    :host([data-theme="dark"]) .sv-x:hover,
+    :host([data-theme="dark"]) .sv-ghost { background: rgba(255,255,255,.08); }
+    :host([data-theme="dark"]) .sv-ghost { color: #cbd5e1; }
+    :host([data-theme="dark"]) .sv-item:hover,
+    :host([data-theme="dark"]) .sv-item:focus-visible { background: rgba(99,102,241,.16); }
+    :host([data-theme="dark"]) .sv-avatar { background: rgba(99,102,241,.16); border-color: rgba(99,102,241,.3); color: #c7d2fe; }
+    :host([data-theme="dark"]) .sv-empty { color: #64748b; }
+    :host([data-theme="dark"]) .sv-fill-hint { color: #a5b4fc; }
+
+    :host([data-theme="light"]) .sv-layer { color: #0f172a; }
+    :host([data-theme="light"]) .sv-panel,
+    :host([data-theme="light"]) .sv-banner { background: #fff; border-color: rgba(15,23,42,.09); }
+    :host([data-theme="light"]) .sv-panel-head,
+    :host([data-theme="light"]) .sv-panel-foot { border-color: rgba(15,23,42,.06); }
+    :host([data-theme="light"]) .sv-head-title,
+    :host([data-theme="light"]) .sv-banner-title,
+    :host([data-theme="light"]) .sv-item-title { color: #0f172a; }
+    :host([data-theme="light"]) .sv-head-sub,
+    :host([data-theme="light"]) .sv-banner-sub,
+    :host([data-theme="light"]) .sv-item-sub,
+    :host([data-theme="light"]) .sv-panel-foot { color: #64748b; }
+    :host([data-theme="light"]) .sv-x:hover,
+    :host([data-theme="light"]) .sv-ghost { background: #f1f5f9; }
+    :host([data-theme="light"]) .sv-ghost { color: #475569; }
+    :host([data-theme="light"]) .sv-item:hover,
+    :host([data-theme="light"]) .sv-item:focus-visible { background: #f5f3ff; }
+    :host([data-theme="light"]) .sv-avatar { background: #eef2ff; border-color: #e0e7ff; color: #4f46e5; }
+    :host([data-theme="light"]) .sv-empty { color: #94a3b8; }
+    :host([data-theme="light"]) .sv-fill-hint { color: #4f46e5; }
+
+    :host([data-material="glass"]) .sv-panel,
+    :host([data-material="glass"]) .sv-banner {
+      background: rgba(255,255,255,.72);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      backdrop-filter: blur(20px) saturate(160%);
+      border-color: rgba(255,255,255,.6);
+      box-shadow: 0 24px 64px rgba(15,23,42,.22), inset 0 1px 0 rgba(255,255,255,.8);
+    }
+    :host([data-material="glass"]) .sv-toast {
+      background: rgba(15,23,42,.72);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+      backdrop-filter: blur(18px) saturate(150%);
+    }
+    :host([data-material="liquid"]) .sv-panel,
+    :host([data-material="liquid"]) .sv-banner {
+      background:
+        radial-gradient(120% 85% at 8% 0%, rgba(255,255,255,.92), rgba(255,255,255,.2) 52%, transparent 76%),
+        linear-gradient(135deg, rgba(238,242,255,.84), rgba(224,231,255,.66) 38%, rgba(196,181,253,.5));
+      -webkit-backdrop-filter: blur(28px) saturate(190%);
+      backdrop-filter: blur(28px) saturate(190%);
+      border: 1px solid rgba(255,255,255,.72);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.95),
+        inset 0 -1px 0 rgba(99,102,241,.12),
+        0 26px 70px rgba(67,56,202,.24);
+    }
+    :host([data-material="liquid"]) .sv-toast {
+      background:
+        linear-gradient(135deg, rgba(30,41,59,.86), rgba(49,46,129,.78));
+      -webkit-backdrop-filter: blur(22px) saturate(180%);
+      backdrop-filter: blur(22px) saturate(180%);
+      border: 1px solid rgba(255,255,255,.16);
+    }
+    :host([data-theme="dark"][data-material="glass"]) .sv-panel,
+    :host([data-theme="dark"][data-material="glass"]) .sv-banner {
+      background: rgba(17,24,39,.72);
+      border-color: rgba(255,255,255,.14);
+      box-shadow: 0 24px 64px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.12);
+    }
+    :host([data-theme="dark"][data-material="liquid"]) .sv-panel,
+    :host([data-theme="dark"][data-material="liquid"]) .sv-banner {
+      background:
+        radial-gradient(120% 85% at 8% 0%, rgba(129,140,248,.28), transparent 58%),
+        linear-gradient(135deg, rgba(17,24,39,.9), rgba(30,27,75,.78));
+      border-color: rgba(165,180,252,.28);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.18),
+        0 26px 70px rgba(0,0,0,.55);
+    }
   `;
 
   function buildUi() {
@@ -676,20 +1167,30 @@
     rootHost.id = 'subvault-ui-root';
     rootHost.style.cssText =
       'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; overflow: visible; z-index: 2147483647; pointer-events: none;';
-    shadow = rootHost.attachShadow({ mode: 'open' });
+    // Chrome Web Store builds carry update_url; use a closed shadow root there
+    // so page scripts cannot inspect the UI. Unpacked/dev builds stay open so
+    // the Playwright E2E suites can drive the same UI.
+    const storeBuild = Boolean(chrome.runtime.getManifest()?.update_url);
+    shadow = rootHost.attachShadow({ mode: storeBuild ? 'closed' : 'open' });
     shadow.innerHTML = `
       <div class="sv-layer">
         <button class="sv-trigger" type="button" data-subvault-trigger hidden aria-label="用 SubVault 填充密码">${KEY_ICON}</button>
-        <section class="sv-panel" data-subvault-popover hidden aria-label="SubVault 账号列表">
+        <button class="sv-gen" type="button" data-subvault-generate hidden aria-label="生成强密码并填入">⚡ 生成强密码</button>
+        <button class="sv-alias" type="button" data-subvault-alias hidden aria-label="使用别名邮箱">@ 使用别名</button>
+        <div class="sv-alias-panel" data-subvault-alias-panel hidden role="dialog" aria-label="已保存的别名邮箱">
+          <div class="sv-alias-head">点击复制别名邮箱（不会自动填入）</div>
+          <div class="sv-alias-list"></div>
+        </div>
+        <section class="sv-panel" id="sv-panel" data-subvault-popover hidden aria-label="SubVault 账号列表">
           <div class="sv-panel-head">
             <div class="sv-mini-logo">S</div>
             <div class="sv-head-copy">
               <div class="sv-head-title">填充登录信息</div>
-              <div class="sv-head-sub"></div>
+              <div class="sv-head-sub" data-i18n-raw></div>
             </div>
             <button class="sv-x sv-panel-close" type="button" aria-label="关闭">×</button>
           </div>
-          <div class="sv-list" role="listbox"></div>
+          <div class="sv-list" id="sv-list" role="listbox" aria-label="账号列表"></div>
           <div class="sv-panel-foot">
             <span class="sv-mode"></span>
             <button class="sv-link sv-manage" type="button">管理密码库</button>
@@ -697,10 +1198,11 @@
         </section>
         <section class="sv-banner" data-subvault-save-banner hidden aria-live="polite">
           <div class="sv-banner-top">
-            <div class="sv-logo">S</div>
+            <div class="sv-logo sv-banner-logo">S</div>
             <div class="sv-banner-copy">
-              <div class="sv-banner-title"></div>
-              <div class="sv-banner-sub"></div>
+              <div class="sv-banner-kicker"></div>
+              <div class="sv-banner-title" data-i18n-raw></div>
+              <div class="sv-banner-sub" data-i18n-raw></div>
             </div>
             <button class="sv-x sv-banner-close" type="button" aria-label="关闭">×</button>
           </div>
@@ -716,6 +1218,10 @@
     `;
     ui = {
       trigger: shadow.querySelector('.sv-trigger'),
+      gen: shadow.querySelector('.sv-gen'),
+      alias: shadow.querySelector('.sv-alias'),
+      aliasPanel: shadow.querySelector('.sv-alias-panel'),
+      aliasList: shadow.querySelector('.sv-alias-list'),
       panel: shadow.querySelector('.sv-panel'),
       panelClose: shadow.querySelector('.sv-panel-close'),
       panelSub: shadow.querySelector('.sv-head-sub'),
@@ -723,6 +1229,8 @@
       mode: shadow.querySelector('.sv-mode'),
       manage: shadow.querySelector('.sv-manage'),
       banner: shadow.querySelector('.sv-banner'),
+      bannerLogo: shadow.querySelector('.sv-banner-logo'),
+      bannerKicker: shadow.querySelector('.sv-banner-kicker'),
       bannerTitle: shadow.querySelector('.sv-banner-title'),
       bannerSub: shadow.querySelector('.sv-banner-sub'),
       bannerClose: shadow.querySelector('.sv-banner-close'),
@@ -733,6 +1241,7 @@
       toast: shadow.querySelector('.sv-toast'),
     };
     document.documentElement.appendChild(rootHost);
+    installLocalization(shadow);
     try {
       const sheet = new CSSStyleSheet();
       sheet.replaceSync(CSS);
@@ -744,6 +1253,7 @@
     }
     state.uiReady = true;
     bindUi();
+    applyBannerPosition();
   }
 
   function ensureUi() {
@@ -759,7 +1269,26 @@
       event.preventDefault();
       event.stopPropagation();
       if (state.panelOpen) hidePanel();
-      else void openPanel(state.activePassword || pickPasswordField());
+      else void openPanel(state.anchorField || state.activePassword || pickPasswordField());
+    });
+
+    ui.gen.addEventListener('mousedown', (event) => event.preventDefault());
+    ui.gen.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void generateForSignup();
+    });
+
+    ui.alias.addEventListener('mousedown', (event) => event.preventDefault());
+    ui.alias.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void toggleAliasPanel();
+    });
+    ui.aliasList.addEventListener('click', (event) => {
+      const item = event.target.closest('.sv-alias-item');
+      if (!item) return;
+      void copyAlias(item.dataset.email);
     });
 
     ui.panelClose.addEventListener('click', () => hidePanel());
@@ -807,10 +1336,18 @@
 
   function setActiveItem(items) {
     items.forEach((item, index) => {
-      item.classList.toggle('is-active', index === state.activeIndex);
-      item.setAttribute('aria-selected', index === state.activeIndex ? 'true' : 'false');
+      const active = index === state.activeIndex;
+      item.classList.toggle('is-active', active);
+      item.setAttribute('aria-selected', active ? 'true' : 'false');
+      item.tabIndex = active ? 0 : -1;
     });
-    items[state.activeIndex]?.scrollIntoView({ block: 'nearest' });
+    const current = items[state.activeIndex];
+    if (current) {
+      current.scrollIntoView({ block: 'nearest' });
+      if (state.anchorField?.isConnected) {
+        state.anchorField.setAttribute('aria-activedescendant', current.id);
+      }
+    }
   }
 
   function panelModeText() {
@@ -827,13 +1364,14 @@
     const query = state.search.trim().toLowerCase();
     const matches = query
       ? state.matches.filter((entry) =>
-          `${entry.title || ''} ${entry.username || ''} ${entry.host || ''}`
+          `${entry.title || ''} ${entry.username || ''} ${entry.aliasEmail || ''} ${entry.host || ''}`
             .toLowerCase()
             .includes(query),
         )
       : state.matches;
 
     if (matches.length === 0) {
+      state.anchorField?.removeAttribute?.('aria-activedescendant');
       const empty = document.createElement('div');
       empty.className = 'sv-empty';
       empty.textContent = query ? '没有匹配的账号' : '当前网站还没有保存的账号';
@@ -843,6 +1381,7 @@
     if (state.activeIndex >= matches.length) state.activeIndex = 0;
 
     let index = 0;
+    const created = [];
     for (const entry of matches) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -850,6 +1389,8 @@
       button.dataset.id = entry.id;
       button.dataset.subvaultAccount = entry.id;
       button.setAttribute('role', 'option');
+      button.id = `sv-option-${index}`;
+      button.tabIndex = index === state.activeIndex ? 0 : -1;
       button.setAttribute('aria-selected', index === state.activeIndex ? 'true' : 'false');
       if (index === state.activeIndex) button.classList.add('is-active');
       index += 1;
@@ -862,9 +1403,11 @@
       copy.className = 'sv-item-copy';
       const title = document.createElement('span');
       title.className = 'sv-item-title';
+      title.setAttribute('data-i18n-raw', '');
       title.textContent = entry.username || entry.title || entry.host || '未命名账号';
       const sub = document.createElement('span');
       sub.className = 'sv-item-sub';
+      sub.setAttribute('data-i18n-raw', '');
       const pieces = [];
       const label = String(entry.title || '').trim();
       if (
@@ -884,8 +1427,10 @@
       hint.textContent = '填充';
 
       button.append(avatar, copy, hint);
+      created.push(button);
       ui.list.appendChild(button);
     }
+    setActiveItem(created);
   }
 
   function openPanel(field) {
@@ -900,6 +1445,9 @@
     state.activeIndex = 0;
     ui.panel.hidden = false;
     ui.trigger.hidden = false;
+    field.setAttribute('aria-haspopup', 'listbox');
+    field.setAttribute('aria-expanded', 'true');
+    field.setAttribute('aria-controls', 'sv-panel');
     void getMatches().then(() => {
       if (!state.panelOpen) return;
       renderPanel();
@@ -912,6 +1460,11 @@
   function hidePanel() {
     state.panelOpen = false;
     if (ui) ui.panel.hidden = true;
+    const anchor = state.anchorField;
+    if (anchor && anchor.isConnected) {
+      anchor.setAttribute('aria-expanded', 'false');
+      anchor.removeAttribute('aria-activedescendant');
+    }
   }
 
   function hideTrigger() {
@@ -941,7 +1494,9 @@
       const field =
         state.anchorField?.isConnected
           ? state.anchorField
-          : state.activePassword;
+          : state.genField?.isConnected
+            ? state.genField
+            : state.activePassword;
       if (!field || !field.isConnected) {
         hideTrigger();
         hidePanel();
@@ -981,6 +1536,46 @@
       ui.trigger.style.left = `${Math.round(clamp(left, 4, window.innerWidth - triggerSize - 4))}px`;
       ui.trigger.style.top = `${Math.round(clamp(top, 4, window.innerHeight - triggerSize - 4))}px`;
 
+      if (ui.gen && !ui.gen.hidden && state.genField?.isConnected) {
+        const genRect = state.genField.getBoundingClientRect();
+        const genWidth = ui.gen.offsetWidth || 108;
+        const genHeight = ui.gen.offsetHeight || 28;
+        let genLeft = genRect.right + 6;
+        if (genLeft + genWidth > window.innerWidth - 6) {
+          genLeft = genRect.right - genWidth - 6;
+        }
+        const genTop = genRect.top + genRect.height / 2 - genHeight / 2;
+        ui.gen.style.left = `${Math.round(clamp(genLeft, 4, window.innerWidth - genWidth - 4))}px`;
+        ui.gen.style.top = `${Math.round(clamp(genTop, 4, window.innerHeight - genHeight - 4))}px`;
+      }
+
+      if (ui.alias && !ui.alias.hidden && state.genField?.isConnected) {
+        const fieldRect = state.genField.getBoundingClientRect();
+        const aliasWidth = ui.alias.offsetWidth || 92;
+        const aliasHeight = ui.alias.offsetHeight || 28;
+        const genWidth = ui.gen?.hidden ? 0 : (ui.gen.offsetWidth || 108) + 6;
+        // Keep the alias chip outside the password field. It used to sit
+        // inside the field and intercepted clicks/focus on the right edge.
+        let aliasLeft = fieldRect.right + 8 + genWidth;
+        if (aliasLeft + aliasWidth > window.innerWidth - 4) {
+          aliasLeft = fieldRect.left - aliasWidth - 8;
+        }
+        const aliasTop = fieldRect.top + fieldRect.height / 2 - aliasHeight / 2;
+        ui.alias.style.left = `${Math.round(clamp(aliasLeft, 4, window.innerWidth - aliasWidth - 4))}px`;
+        ui.alias.style.top = `${Math.round(clamp(aliasTop, 4, window.innerHeight - aliasHeight - 4))}px`;
+      }
+      if (ui.aliasPanel && !ui.aliasPanel.hidden && state.genField?.isConnected) {
+        const fieldRect = state.genField.getBoundingClientRect();
+        const panelWidth = ui.aliasPanel.offsetWidth || 292;
+        const panelHeight = ui.aliasPanel.offsetHeight || 180;
+        let panelLeft = fieldRect.right - panelWidth;
+        if (panelLeft < 8) panelLeft = fieldRect.left;
+        let panelTop = fieldRect.bottom + 8;
+        if (panelTop + panelHeight > window.innerHeight - 8) panelTop = fieldRect.top - panelHeight - 8;
+        ui.aliasPanel.style.left = `${Math.round(clamp(panelLeft, 8, window.innerWidth - panelWidth - 8))}px`;
+        ui.aliasPanel.style.top = `${Math.round(clamp(panelTop, 8, window.innerHeight - panelHeight - 8))}px`;
+      }
+
       if (!state.panelOpen) return;
       const panelWidth = 324;
       const panelHeight = Math.min(372, ui.panel.offsetHeight || 320);
@@ -994,14 +1589,33 @@
     });
   }
 
-  function showToast(message) {
+  function showToast(title, detail = '', { error = false } = {}) {
     if (!ensureUi()) return;
-    ui.toast.textContent = message;
+    applyBannerPosition();
+    ui.toast.replaceChildren();
+    const titleText = String(title || '').trim();
+    const detailText = String(detail || '').trim();
+    const titleElement = document.createElement('div');
+    titleElement.className = 'sv-toast-title';
+    titleElement.setAttribute('data-i18n-raw', '');
+    titleElement.textContent = titleText || detailText || tr('操作完成');
+    ui.toast.appendChild(titleElement);
+    if (titleText && detailText) {
+      const detailElement = document.createElement('div');
+      detailElement.className = 'sv-toast-detail';
+      detailElement.setAttribute('data-i18n-raw', '');
+      detailElement.textContent = detailText;
+      ui.toast.appendChild(detailElement);
+    }
+    ui.toast.setAttribute('role', 'status');
+    ui.toast.setAttribute('aria-live', 'polite');
+    ui.toast.setAttribute('aria-atomic', 'true');
+    ui.toast.classList.toggle('is-error', error);
     ui.toast.hidden = false;
     clearTimeout(state.toastTimer);
     state.toastTimer = setTimeout(() => {
       if (ui) ui.toast.hidden = true;
-    }, 2600);
+    }, 2800);
   }
 
   /* ------------------------------------------------------------------ */
@@ -1014,8 +1628,23 @@
     const position = positions.includes(state.settings.savePromptPosition)
       ? state.settings.savePromptPosition
       : 'top-right';
-    for (const name of positions) ui.banner.classList.remove(`pos-${name}`);
+    for (const name of positions) {
+      ui.banner.classList.remove(`pos-${name}`);
+      ui.toast?.classList.remove(`pos-${name}`);
+    }
     ui.banner.classList.add(`pos-${position}`);
+    ui.toast?.classList.add(`pos-${position}`);
+
+    const theme = ['system', 'light', 'dark'].includes(state.settings.theme)
+      ? state.settings.theme
+      : 'system';
+    if (theme === 'system') delete rootHost.dataset.theme;
+    else rootHost.dataset.theme = theme;
+
+    const material = ['solid', 'glass', 'liquid'].includes(state.settings.material)
+      ? state.settings.material
+      : 'solid';
+    rootHost.dataset.material = material;
   }
 
   function hideBanner() {
@@ -1036,10 +1665,15 @@
     ui.banner.hidden = false;
     try {
       state.banner = { ...pending, mode: 'save' };
-      ui.bannerTitle.textContent = pending.existing ? '更新登录密码？' : '保存登录信息？';
-      const pieces = [pending.username || '无用户名', pending.host];
-      if (pending.createdAt) pieces.push(`时间 ${formatTime(pending.createdAt)}`);
-      ui.bannerSub.textContent = pieces.join(' · ');
+      const username = pending.username || '无用户名';
+      const action = pending.existing ? '更新登录密码' : '保存新账号';
+      ui.bannerKicker.textContent = action;
+      ui.bannerTitle.textContent = username;
+      ui.bannerLogo.textContent = username.trim().charAt(0).toUpperCase() || 'S';
+      const pieces = [pending.host];
+      if (pending.createdAt) pieces.push(`记录于 ${formatTime(pending.createdAt)}`);
+      ui.bannerSub.textContent = pieces.filter(Boolean).join(' · ');
+      ui.save.textContent = pending.existing ? '更新账号' : '保存账号';
       ui.save.hidden = false;
       ui.dismiss.hidden = false;
       ui.ignore.hidden = false;
@@ -1060,7 +1694,9 @@
     applyBannerPosition();
     state.lockedHintShown = true;
     state.banner = { mode: 'locked' };
-    ui.bannerTitle.textContent = initialized ? 'SubVault 已锁定' : '还没有密码库';
+    ui.bannerKicker.textContent = initialized ? '密码库已锁定' : '还没有密码库';
+    ui.bannerTitle.textContent = state.host || '当前网站';
+    ui.bannerLogo.textContent = (state.host || 'S').trim().charAt(0).toUpperCase() || 'S';
     ui.bannerSub.textContent = initialized
       ? `本次登录信息未保存。解锁后即可使用 SubVault 管理 ${state.host} 的密码。`
       : '创建本地加密密码库后，登录信息才会被安全保存。';
@@ -1086,8 +1722,11 @@
       else showToast(result.error || '保存失败');
       return;
     }
+    const savedBanner = { ...(state.banner || {}) };
     hideBanner();
-    showToast('已保存到 SubVault');
+    const account = savedBanner.username || '当前账号';
+    const action = result.updated ? '更新' : '新增';
+    showToast(account, `已${action}账号 · ${savedBanner.host || state.host}`);
     state.matchesAt = 0;
     void getMatches(true);
     showNextPending();
@@ -1156,8 +1795,12 @@
   /* Capture / autofill                                                  */
   /* ------------------------------------------------------------------ */
 
-  function captureCredentials(passwordField) {
-    if (!isLoginPasswordField(passwordField)) return;
+  function captureCredentials(passwordField, { signup = false } = {}) {
+    if (signup) {
+      if (!isSignupPasswordField(passwordField)) return;
+    } else if (!isLoginPasswordField(passwordField)) {
+      return;
+    }
     const password = passwordField.value;
     if (!password || password.length > 4096) return;
     const usernameField = findUsernameField(passwordField);
@@ -1168,6 +1811,141 @@
     state.lastSignature = signature;
     state.lastCaptureAt = now;
     void offerSave(username, password);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Registration guidance                                               */
+  /* ------------------------------------------------------------------ */
+
+  function isSignupPasswordField(input) {
+    if (!isPasswordInput(input) || !isVisible(input)) return false;
+    if (input.disabled || input.readOnly) return false;
+    if (looksLikeNewPassword(input)) return true;
+    const form = formOf(input);
+    if (form === document) return false;
+    if (signsUpForm(form)) return true;
+    return visiblePasswordFields(form).length > 1;
+  }
+
+  function firstSignupPasswordField() {
+    return collectInputs(document).find((input) => isSignupPasswordField(input)) || null;
+  }
+
+  function showGenChip(field) {
+    if (
+      !field ||
+      state.locked ||
+      !state.settings.showIcon ||
+      sitePolicy().hideIcon ||
+      !isSignupPasswordField(field)
+    ) {
+      hideGenChip();
+      return;
+    }
+    if (!ensureUi() || !isVisible(field)) {
+      hideGenChip();
+      return;
+    }
+    state.genField = field;
+    state.anchorField = field;
+    ui.gen.hidden = false;
+    if (ui.alias) ui.alias.hidden = false;
+    positionUi();
+  }
+
+  function hideGenChip() {
+    if (state.anchorField && state.anchorField === state.genField) {
+      state.anchorField = null;
+    }
+    state.genField = null;
+    if (ui?.gen) ui.gen.hidden = true;
+    if (ui?.alias) ui.alias.hidden = true;
+    hideAliasPanel();
+  }
+
+  function hideAliasPanel() {
+    if (ui?.aliasPanel) ui.aliasPanel.hidden = true;
+  }
+
+  async function toggleAliasPanel() {
+    if (!state.genField || state.locked) return;
+    if (ui.aliasPanel && !ui.aliasPanel.hidden) {
+      hideAliasPanel();
+      return;
+    }
+    const result = await send('SV_GET_ALIASES');
+    if (!result.ok) {
+      showToast(result.error || '无法读取别名', '', { error: true });
+      return;
+    }
+    const aliases = Array.isArray(result.aliases) ? result.aliases : [];
+    if (!aliases.length) {
+      showToast('还没有保存的别名', '在账号条目中填写“注册邮箱/别名”后即可使用');
+      return;
+    }
+    ui.aliasList.replaceChildren();
+    for (const alias of aliases) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sv-alias-item';
+      button.dataset.email = alias.email;
+      const email = document.createElement('span');
+      email.className = 'sv-alias-email';
+      email.textContent = alias.email;
+      const meta = document.createElement('span');
+      meta.className = 'sv-alias-provider';
+      meta.textContent = [alias.provider, alias.host].filter(Boolean).join(' · ') || '已保存别名';
+      button.append(email, meta);
+      ui.aliasList.appendChild(button);
+    }
+    ui.aliasPanel.hidden = false;
+    positionUi();
+  }
+
+  async function copyAlias(value) {
+    const text = String(value || '');
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const helper = document.createElement('textarea');
+      helper.value = text;
+      helper.style.cssText = 'position:fixed;opacity:0;pointer-events:none;';
+      document.documentElement.appendChild(helper);
+      helper.select();
+      document.execCommand('copy');
+      helper.remove();
+    }
+    showToast('已复制别名邮箱', text);
+    hideAliasPanel();
+  }
+
+  async function generateForSignup() {
+    const field = state.genField;
+    if (!field || !field.isConnected) {
+      hideGenChip();
+      return;
+    }
+    if (state.locked) {
+      showLockedHint();
+      return;
+    }
+    const result = await send('SV_GENERATE_PASSWORD', { options: { length: 20 } });
+    if (!result.ok || !result.password) {
+      showToast(result.error || '无法生成密码', '', { error: true });
+      return;
+    }
+    if (state.locked || !field.isConnected) return;
+    const value = String(result.password);
+    setNativeValue(field, value);
+    const form = formOf(field);
+    for (const sibling of collectInputs(form)) {
+      if (sibling === field || !isPasswordInput(sibling) || !isVisible(sibling)) continue;
+      if (sibling.disabled || sibling.readOnly) continue;
+      if (isSignupPasswordField(sibling)) setNativeValue(sibling, value);
+    }
+    state.lastCaptureAt = 0;
+    showToast('已生成强密码', '请在完成注册后保存到 SubVault');
   }
 
   function onSubmitClick(event) {
@@ -1184,9 +1962,11 @@
         .replace(/[\s\u200B-\u200D\uFEFF]+/g, '')
         .slice(0, 80);
     const isExcluded = (label) =>
-      /logout|signout|退出|忘记|forgot|注册|signup|createaccount/i.test(label);
+      /logout|signout|退出|忘记|forgot/i.test(label);
     const isLoginLabel = (label) =>
       /login|signin|continue|next|submit|登录|登入|下一步|继续|提交/i.test(label);
+    const isSignupLabel = (label) =>
+      /signup|sign.?up|register|createaccount|创建账号|创建账户|注册/i.test(label);
 
     let control = target.closest(
       'button, input[type="submit"], input[type="image"], input[type="button"], [role="button"], a',
@@ -1216,13 +1996,16 @@
         const text = normalize(element.innerText || element.textContent);
         if (
           text &&
-          isLoginLabel(text) &&
+          (isLoginLabel(text) || isSignupLabel(text)) &&
           !isExcluded(text) &&
           element instanceof HTMLElement &&
           !['FORM', 'LABEL', 'INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName)
         ) {
           const style = getComputedStyle(element);
-          const exactLogin = /^(登录|登入|下一步|继续|提交|login|signin|continue|next)$/i.test(text);
+          const exactLogin =
+            /^(登录|登入|下一步|继续|提交|注册|login|signin|continue|next|signup|register)$/i.test(
+              text,
+            );
           const isClickable =
             element.matches('[role="button"], [onclick], [tabindex]') ||
             style.cursor === 'pointer' ||
@@ -1243,9 +2026,19 @@
       (control instanceof HTMLButtonElement && control.type === 'submit') ||
       (control instanceof HTMLInputElement && ['submit', 'image'].includes(control.type)) ||
       (control instanceof HTMLButtonElement && !control.hasAttribute('type'));
-    if (!isSubmit && !isLoginLabel(label)) return;
+    if (!isSubmit && !isLoginLabel(label) && !isSignupLabel(label)) return;
 
     const form = control.closest('form');
+    const signup =
+      isSignupLabel(label) || (form instanceof HTMLFormElement && signsUpForm(form));
+    if (signup) {
+      const password = form
+        ? collectInputs(form).find((input) => isSignupPasswordField(input))
+        : firstSignupPasswordField();
+      if (password) captureCredentials(password, { signup: true });
+      return;
+    }
+
     const password = form
       ? collectInputs(form).find(
           (input) => isPasswordInput(input) && isLoginPasswordField(input),
@@ -1256,6 +2049,10 @@
   }
 
   function onKeyDown(event) {
+    if (event.key === 'Escape' && ui?.aliasPanel && !ui.aliasPanel.hidden) {
+      hideAliasPanel();
+      return;
+    }
     if (state.panelOpen && !event.composedPath().includes(rootHost)) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -1281,7 +2078,12 @@
     const target = event
       .composedPath()
       .find((node) => node instanceof HTMLInputElement);
-    if (!target || !isPasswordInput(target) || !isLoginPasswordField(target)) return;
+    if (!target || !isPasswordInput(target)) return;
+    if (isSignupPasswordField(target)) {
+      captureCredentials(target, { signup: true });
+      return;
+    }
+    if (!isLoginPasswordField(target)) return;
     captureCredentials(target);
   }
 
@@ -1356,6 +2158,12 @@
     if (event.composedPath().includes(rootHost)) return;
 
     const target = eventInput(event);
+    if (target && isPasswordInput(target) && isSignupPasswordField(target)) {
+      hidePanel();
+      showGenChip(target);
+      return;
+    }
+    hideGenChip();
     const resolved = resolveLoginField(target);
     if (!resolved) {
       hideTrigger();
@@ -1382,9 +2190,13 @@
       if (shadow.activeElement) return;
       if (state.panelOpen) return;
       const focused = activeInputElement() || document.activeElement;
+      const onSignupPassword =
+        focused instanceof HTMLInputElement && isSignupPasswordField(focused);
+      if (!onSignupPassword) hideGenChip();
       if (resolveLoginField(focused)) return;
       state.autoOpened = new WeakSet();
       hideTrigger();
+      if (!onSignupPassword) hideGenChip();
     }, 200);
   }
 
@@ -1431,7 +2243,7 @@
     const matches = await getMatches(true);
     if (matches.length !== 1) return;
     await fillById(matches[0].id, { silent: true });
-    showToast('SubVault 已自动填充');
+    showToast(matches[0].username || matches[0].title || '当前账号', '已自动填入账号');
   }
 
   async function handleShortcut() {
@@ -1507,6 +2319,7 @@
 
   function onDomReady() {
     getSettings().then(() => {
+      applyBannerPosition();
       applyTakeoverMarking();
       scheduleNativeChecks();
       if (state.settings.autoFill) setTimeout(() => void tryAutoFill(), 700);
@@ -1522,8 +2335,13 @@
     if (area !== 'local' || !changes.settings) return;
     state.settings = { ...DEFAULTS, ...(changes.settings.newValue || {}) };
     state.settingsLoaded = true;
+    state.settingsVersion += 1;
+    applyUiLanguage(state.settings.uiLanguage);
     applyBannerPosition();
-    if (!state.settings.showIcon) hideTrigger();
+    if (!state.settings.showIcon) {
+      hideTrigger();
+      hideGenChip();
+    }
   });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -1532,9 +2350,62 @@
       fillById(message.id).then((ok) => sendResponse({ ok }));
       return true;
     }
+    if (message.type === 'SV_FILL_PROFILE_BY_ID') {
+      fillProfileById(message.id).then((ok) => sendResponse({ ok }));
+      return true;
+    }
     if (message.type === 'SV_FILL_SHORTCUT') {
       void handleShortcut();
       sendResponse({ ok: true });
+      return undefined;
+    }
+    if (message.type === 'SV_SETTINGS_CHANGED') {
+      state.settings = { ...DEFAULTS, ...(message.settings || {}) };
+      state.settingsLoaded = true;
+      state.settingsVersion += 1;
+      applyUiLanguage(state.settings.uiLanguage);
+      applyBannerPosition();
+      if (!state.settings.showIcon) {
+        hideTrigger();
+        hideGenChip();
+      }
+      return undefined;
+    }
+    if (message.type === 'SV_TRAVEL_CHANGED') {
+      state.matches = [];
+      state.matchesAt = 0;
+      state.matchesHost = '';
+      hidePanel();
+      hideTrigger();
+      hideGenChip();
+      if (!state.locked && isTopFrame) {
+        const active = activeInputElement();
+        const resolved = resolveLoginField(active);
+        if (resolved) activateField(resolved.anchor, resolved.field, resolved.usernameOnly);
+        void initPending();
+      }
+      return undefined;
+    }
+    if (message.type === 'SV_UNLOCKED') {
+      // No page reload should be needed: refresh the session view immediately.
+      state.locked = false;
+      state.matches = [];
+      state.matchesAt = 0;
+      state.matchesHost = '';
+      state.lockedHintShown = false;
+      if (isTopFrame) {
+        applyTakeoverMarking();
+        scheduleNativeChecks();
+        void initPending();
+        const active = activeInputElement();
+        let resolved = resolveLoginField(active);
+        if (!resolved && state.anchorField?.isConnected && isVisible(state.anchorField)) {
+          resolved = resolveLoginField(state.anchorField);
+        }
+        if (resolved) {
+          activateField(resolved.anchor, resolved.field, resolved.usernameOnly);
+        }
+      }
       return undefined;
     }
     if (message.type === 'SV_LOCKED') {
@@ -1543,6 +2414,7 @@
       state.matchesHost = '';
       hidePanel();
       hideTrigger();
+      hideGenChip();
       hideBanner();
       return undefined;
     }

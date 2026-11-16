@@ -1,0 +1,81 @@
+# Security Policy
+
+## Supported version
+
+Security fixes target the latest released SubVault version. Older versions may
+receive documentation-only guidance.
+
+## Reporting a vulnerability
+
+Please do not open a public issue for a vulnerability that could expose vault
+data or bypass authentication.
+
+Use GitHub's private security advisory for this repository:
+
+- https://github.com/1214163108/SubVault/security/advisories/new
+
+Include the affected version, steps to reproduce, impact, and whether a native
+host is involved. Do not include real master passwords, vault data, or export
+files in the report.
+
+## Scope and security model
+
+- SubVault is a local-only Chromium extension. It has no server account, cloud
+  sync, telemetry, or network synchronization endpoint.
+- Up to 20 independently encrypted vaults are stored in `chrome.storage.local`
+  under `vault` / `vault:<id>`; each has its own master password. A plaintext
+  index stores only ids, names, timestamps and the key-file flag.
+- Vault format v4 derives a KEK from the master password (Argon2id or
+  PBKDF2-SHA512) and uses it only to wrap a random 32-byte VaultKey with
+  AES-256-GCM. Entries are encrypted under the VaultKey. Changing the master
+  password or key file rewraps the VaultKey; it does not re-encrypt the payload.
+- Before migrating an older vault, the original encrypted blob is copied to
+  `vaultBackup:<id>` locally. The new blob is verified in memory before it
+  replaces the original. The settings page can roll back with the master
+  password; rollback locks the vault and the next unlock migrates again. The
+  migration backup is not synchronized or uploaded.
+- Optional device quick unlock is Windows-only. Enabling it creates a WebAuthn
+  platform-authenticator credential (Windows Hello interaction) and the sync
+  host protects a local-only copy of the 32-byte VaultKey with Windows DPAPI
+  (`DataProtectionScope.CurrentUser`) in `device.json` / `device-<id>.json`,
+  alongside the credential id. Unlocking performs a platform-authenticator
+  assertion first and then asks the host to unprotect the VaultKey. The
+  extension never stores the master password, the host never writes the
+  VaultKey in plaintext, and the binding is never synchronized. If the browser
+  or system cannot provide a platform authenticator, the binding falls back to
+  DPAPI without an interactive prompt. The master password (plus optional key
+  file) always remains a fallback. Removing the binding, deleting the vault,
+  rolling back the format, or wiping the extension asks the host to delete the
+  binding.
+- The in-memory key and pending save sessions use `chrome.storage.session`.
+- The Native Messaging host stores encrypted vault blobs per vault
+  (`state.json` / `vault-<id>.json`) plus DPAPI-protected device bindings
+  (`device.json` / `device-<id>.json`). It cannot decrypt the master password
+  and does not open a listening port. Optional WebDAV is an independent
+  encrypted backup/restore target, not a real-time sync transport; the host
+  performs GET/PUT/MKCOL to the user-configured server, credentials are passed
+  per command, and they are not written to host storage.
+- `.svshare` v2 uses a separate PBKDF2 + AES-GCM password. `expiresAt` is
+  mixed into the KDF salt and the AES-GCM AAD, so altering the expiry breaks
+  decryption rather than merely hiding the file in the UI. The bundled
+  `companion/index.html` decrypts them locally with no network access.
+- Encrypted backups can carry an optional expiry that is bound into the KDF and
+  AAD (format v5). Such backups require an independent backup password, and an
+  expired file cannot be decrypted with the original password.
+- Passkey support stores only credential id, RP id, account and note as vault
+  metadata; the extension cannot import or use a platform Passkey private key.
+- TOTP secrets are stored in the encrypted vault and codes are generated
+  locally; the TOTP quick view and countdown never send secrets anywhere.
+- The extension deliberately receives broad host permissions to detect login
+  forms. See the README permission table for details.
+- There has not been an independent third-party security audit of SubVault.
+  Do not describe it as audited until such an audit has been completed and its
+  scope published.
+
+## User responsibilities
+
+- Use a strong, unique master password.
+- Keep encrypted backups and recovery instructions separately.
+- Verify release SHA-256 checksums before installing a downloaded package.
+- Remove exported plaintext CSV files after use.
+- Native sync requires the same master password on both browser profiles.

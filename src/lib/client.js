@@ -1,5 +1,7 @@
 /** Helpers shared by the popup and options pages. */
 
+import { formatLocale, isEnglish, tr } from './i18n.js';
+
 export function send(type, payload = {}) {
   return new Promise((resolve) => {
     try {
@@ -20,7 +22,7 @@ export function formatDateTime(timestamp) {
   const value = Number(timestamp);
   if (!Number.isFinite(value) || value <= 0) return '—';
   try {
-    return new Intl.DateTimeFormat('zh-CN', {
+    return new Intl.DateTimeFormat(formatLocale(), {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -28,7 +30,7 @@ export function formatDateTime(timestamp) {
       minute: '2-digit',
     }).format(new Date(value));
   } catch {
-    return new Date(value).toLocaleString();
+    return new Date(value).toLocaleString(formatLocale());
   }
 }
 
@@ -36,13 +38,13 @@ export function formatDate(timestamp) {
   const value = Number(timestamp);
   if (!Number.isFinite(value) || value <= 0) return '—';
   try {
-    return new Intl.DateTimeFormat('zh-CN', {
+    return new Intl.DateTimeFormat(formatLocale(), {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
     }).format(new Date(value));
   } catch {
-    return new Date(value).toLocaleDateString();
+    return new Date(value).toLocaleDateString(formatLocale());
   }
 }
 
@@ -55,11 +57,16 @@ export function relativeDays(timestamp) {
 export function formatRelative(timestamp) {
   const days = relativeDays(timestamp);
   if (days === null) return '—';
-  if (days <= 0) return '今天';
-  if (days === 1) return '昨天';
-  if (days < 30) return `${days} 天前`;
-  if (days < 365) return `${Math.floor(days / 30)} 个月前`;
-  return `${Math.floor(days / 365)} 年前`;
+  const english = isEnglish();
+  if (days <= 0) return english ? 'Today' : '今天';
+  if (days === 1) return english ? 'Yesterday' : '昨天';
+  if (days < 30) return english ? `${days} days ago` : `${days} 天前`;
+  if (days < 365) {
+    const months = Math.floor(days / 30);
+    return english ? `${months} months ago` : `${months} 个月前`;
+  }
+  const years = Math.floor(days / 365);
+  return english ? `${years} years ago` : `${years} 年前`;
 }
 
 export function createElement(tag, className, text) {
@@ -67,6 +74,14 @@ export function createElement(tag, className, text) {
   if (className) element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
+}
+
+/** Append the configured clipboard auto-clear hint to a copy toast. */
+export function clipboardMessage(message, clearAfterSeconds = 0) {
+  const seconds = Number(clearAfterSeconds) || 0;
+  const text = tr(message);
+  if (seconds <= 0) return text;
+  return isEnglish() ? `${text}, clears in ${seconds}s` : `${text}，${seconds} 秒后自动清除`;
 }
 
 export async function copyText(text, { clearAfterSeconds = 0 } = {}) {
@@ -126,9 +141,33 @@ export function downloadText(filename, text, mime = 'text/plain;charset=utf-8') 
 
 export function makeToast(element) {
   let timer = 0;
-  return (message, { error = false, duration = 2800 } = {}) => {
+  return (message, optionsOrDetail = {}, maybeOptions = {}) => {
     if (!element) return;
-    element.textContent = message;
+    let detail = '';
+    let options = optionsOrDetail;
+    if (typeof optionsOrDetail === 'string') {
+      detail = optionsOrDetail;
+      options = maybeOptions || {};
+    }
+    const { error = false, duration = 2800 } = options || {};
+    element.replaceChildren();
+    const titleText = String(message ?? '').trim();
+    const detailText = String(detail ?? '').trim();
+    const title = document.createElement('div');
+    title.className = 'toast-title';
+    title.setAttribute('data-i18n-raw', '');
+    title.textContent = titleText || detailText || tr('操作完成');
+    element.appendChild(title);
+    if (titleText && detailText) {
+      const detailElement = document.createElement('div');
+      detailElement.className = 'toast-detail';
+      detailElement.setAttribute('data-i18n-raw', '');
+      detailElement.textContent = detailText;
+      element.appendChild(detailElement);
+    }
+    element.setAttribute('role', 'status');
+    element.setAttribute('aria-live', 'polite');
+    element.setAttribute('aria-atomic', 'true');
     element.classList.toggle('is-error', error);
     element.hidden = false;
     clearTimeout(timer);
@@ -140,4 +179,22 @@ export function makeToast(element) {
 
 export function isLockedError(message) {
   return typeof message === 'string' && message.includes('锁定');
+}
+
+/** Read a File as base64 (without the data: prefix). */
+export function readFileBase64(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      resolve('');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : '');
+    };
+    reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+    reader.readAsDataURL(file);
+  });
 }

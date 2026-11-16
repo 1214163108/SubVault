@@ -1,6 +1,7 @@
 .tmp/
 .tmp-e2e/
 .tmp-host/
+.tmp-*/
 native-host/extension-private-key.pem
 dist/
 node_modules/
@@ -10,3 +11,13 @@ playwright-report/
 *.log
 native-host/com.subvault.sync.json
 native-host/data/
+
+.tmp-*.mjs
+.tmp-*.sh
+
+# local planning notes
+优化方案*.md
+升级方案V2*.md
+对比PineVault*.md
+
+.github/

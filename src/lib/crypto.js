@@ -17,7 +17,13 @@
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
 
+import '../vendor/hash-wasm-argon2.umd.js';
+
 export const KDF_ALGO = 'PBKDF2-SHA512';
+export const KDF_ALGO_ARGON2 = 'ARGON2ID';
+export const ARGON2_MEMORY_KIB = 65536;
+export const ARGON2_ITERATIONS = 3;
+export const ARGON2_PARALLELISM = 1;
 export const KDF_HASH = 'SHA-512';
 export const KDF_LEGACY_HASH = 'SHA-256';
 export const KDF_ITERATIONS = 310_000;
@@ -25,6 +31,9 @@ export const KDF_MIN_ITERATIONS = 100_000;
 export const KDF_SALT_BYTES = 32;
 export const AES_KEY_BITS = 256;
 export const VAULT_VERSION = 1;
+export const VAULT_FORMAT_VERSION = 4;
+export const AAD_VAULT_KEY = 'subvault:vaultkey:v4';
+export const AAD_PAYLOAD_V4 = 'subvault:vault:v4';
 
 const COMMON_PASSWORDS = new Set([
   'password',
@@ -172,8 +181,87 @@ export async function decryptJSON(key, box, aad = '') {
   }
 }
 
+async function encryptBytes(key, bytes, aad = '') {
+  const iv = randomBytes(12);
+  const params = { name: 'AES-GCM', iv };
+  if (aad) params.additionalData = TEXT_ENCODER.encode(aad);
+  const ciphertext = await crypto.subtle.encrypt(params, key, bytes);
+  return { iv: b64encode(iv), data: b64encode(new Uint8Array(ciphertext)) };
+}
+
+async function decryptBytes(key, box, aad = '') {
+  if (!box || typeof box.iv !== 'string' || typeof box.data !== 'string') {
+    throw new Error('密码库数据格式无效');
+  }
+  const params = { name: 'AES-GCM', iv: b64decode(box.iv) };
+  if (aad) params.additionalData = TEXT_ENCODER.encode(aad);
+  try {
+    return new Uint8Array(await crypto.subtle.decrypt(params, key, b64decode(box.data)));
+  } catch {
+    throw new Error('主密码错误，或密码库数据已损坏');
+  }
+}
+
+/** Generate the random payload key used by vault format v4. */
+export async function createVaultKey() {
+  return crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: AES_KEY_BITS },
+    true,
+    ['encrypt', 'decrypt'],
+  );
+}
+
+/** Wrap (encrypt) a VaultKey under the password-derived KEK. */
+export async function wrapVaultKey(kek, vaultKey) {
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', vaultKey));
+  return encryptBytes(kek, raw, AAD_VAULT_KEY);
+}
+
+/** Unwrap a VaultKey with the password-derived KEK. */
+export async function unwrapVaultKey(kek, box) {
+  const raw = await decryptBytes(kek, box, AAD_VAULT_KEY);
+  if (raw.length !== AES_KEY_BITS / 8) throw new Error('VaultKey 数据无效');
+  try {
+    return await crypto.subtle.importKey(
+      'raw',
+      raw,
+      { name: 'AES-GCM', length: AES_KEY_BITS },
+      true,
+      ['encrypt', 'decrypt'],
+    );
+  } catch {
+    throw new Error('VaultKey 数据无效');
+  }
+}
+
+export async function encryptPayload(key, value) {
+  return encryptJSON(key, value, AAD_PAYLOAD_V4);
+}
+
+export async function decryptPayload(key, box) {
+  return decryptJSON(key, box, AAD_PAYLOAD_V4);
+}
+
 export async function exportKeyJwk(key) {
   return crypto.subtle.exportKey('jwk', key);
+}
+
+/** Export a raw AES key for host-side device binding (base64-encoded caller). */
+export async function exportKeyRaw(key) {
+  return new Uint8Array(await crypto.subtle.exportKey('raw', key));
+}
+
+/** Import a raw AES-GCM key returned by the device-binding host. */
+export async function importKeyRaw(raw) {
+  const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+  if (bytes.length !== AES_KEY_BITS / 8) throw new Error('设备密钥长度无效');
+  return crypto.subtle.importKey(
+    'raw',
+    bytes,
+    { name: 'AES-GCM', length: AES_KEY_BITS },
+    true,
+    ['encrypt', 'decrypt'],
+  );
 }
 
 export async function importKeyJwk(jwk) {
@@ -193,6 +281,62 @@ export function createKdfParams(iterations = KDF_ITERATIONS) {
     salt: b64encode(randomBytes(KDF_SALT_BYTES)),
     iterations,
   };
+}
+
+export function createArgon2Params() {
+  return {
+    algo: KDF_ALGO_ARGON2,
+    salt: b64encode(randomBytes(KDF_SALT_BYTES)),
+    iterations: ARGON2_ITERATIONS,
+    memorySize: ARGON2_MEMORY_KIB,
+    parallelism: ARGON2_PARALLELISM,
+    hashLength: AES_KEY_BITS / 8,
+  };
+}
+
+/**
+ * Derive the AES-GCM vault key from a stored KDF descriptor.
+ * Supports PBKDF2-SHA512 (legacy/default) and Argon2id (bundled WASM).
+ * @param {string} password
+ * @param {Record<string, any>} kdf
+ * @returns {Promise<CryptoKey>}
+ */
+export async function deriveKeyFromKdf(password, kdf = {}) {
+  if (!kdf || !kdf.salt) throw new Error('密码库加密参数缺失');
+  if (kdf.algo === KDF_ALGO_ARGON2) {
+    if (typeof password !== 'string' || password.length === 0) {
+      throw new Error('主密码不能为空');
+    }
+    const engine = globalThis.hashwasm;
+    if (!engine?.argon2id) throw new Error('Argon2 引擎未加载，请刷新页面后重试');
+    let raw;
+    try {
+      raw = await engine.argon2id({
+        password: TEXT_ENCODER.encode(password),
+        salt: b64decode(kdf.salt),
+        parallelism: Math.min(4, Math.max(1, Number(kdf.parallelism) || 1)),
+        iterations: Math.min(10, Math.max(1, Number(kdf.iterations) || 3)),
+        memorySize: Math.min(262144, Math.max(8192, Number(kdf.memorySize) || 65536)),
+        hashLength: 32,
+        outputType: 'binary',
+      });
+    } catch (error) {
+      throw new Error(`Argon2 密钥派生失败：${error?.message || '未知错误'}`);
+    }
+    if (!(raw instanceof Uint8Array) || raw.length !== 32) {
+      throw new Error('Argon2 密钥派生结果无效');
+    }
+    return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: AES_KEY_BITS }, true, [
+      'encrypt',
+      'decrypt',
+    ]);
+  }
+  return deriveKey(
+    password,
+    kdf.salt,
+    Math.max(KDF_MIN_ITERATIONS, Number(kdf.iterations) || KDF_ITERATIONS),
+    kdf.hash === 'SHA-512' ? 'SHA-512' : KDF_LEGACY_HASH,
+  );
 }
 
 /**
@@ -216,4 +360,12 @@ export function passwordStrength(password) {
   if (bits < 70) return { score: 2, label: '一般' };
   if (bits < 100) return { score: 3, label: '较强' };
   return { score: 4, label: '很强' };
+}
+
+export async function sha256Hex(value) {
+  const data = new TextEncoder().encode(String(value ?? ''));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  let out = '';
+  for (const byte of digest) out += byte.toString(16).padStart(2, '0');
+  return out;
 }

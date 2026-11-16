@@ -28,9 +28,20 @@ try {
   await page.goto(`chrome-extension://${extensionId}/src/options/options.html`);
   await page.waitForFunction(() => Boolean(window.chrome?.runtime?.id));
   const setup = await page.evaluate(() =>
-    chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'copy-password' }),
+    chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'SubVault-Test-2026!Qm7#' }),
   );
   if (!setup?.ok) throw new Error(`setup: ${setup?.error}`);
+  await page.evaluate(() =>
+    chrome.runtime.sendMessage({
+      type: 'SV_SET_SETTINGS',
+      settings: { theme: 'dark', material: 'liquid', lockOnSystemLock: false, lockOnSystemIdle: false },
+    }),
+  );
+  await page.waitForTimeout(250);
+  const optionsTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  const optionsMaterial = await page.evaluate(() => document.documentElement.dataset.material);
+  if (optionsTheme !== 'dark') throw new Error(`options theme: ${optionsTheme}`);
+  if (optionsMaterial !== 'liquid') throw new Error(`options material: ${optionsMaterial}`);
   const added = await page.evaluate(() =>
     chrome.runtime.sendMessage({
       type: 'SV_ADD_ENTRY',
@@ -56,6 +67,10 @@ try {
   await popup.setViewportSize({ width: 382, height: 600 });
   await popup.goto(`chrome-extension://${extensionId}/src/popup/popup.html`);
   await popup.waitForSelector('[title="复制密码"]');
+  const popupTheme = await popup.evaluate(() => document.documentElement.dataset.theme);
+  const popupMaterial = await popup.evaluate(() => document.documentElement.dataset.material);
+  if (popupTheme !== 'dark') throw new Error(`popup theme: ${popupTheme}`);
+  if (popupMaterial !== 'liquid') throw new Error(`popup material: ${popupMaterial}`);
   await popup.locator('[title="复制密码"]').first().click();
   await popup.waitForTimeout(500);
   await popup.bringToFront();
@@ -91,7 +106,7 @@ try {
 
   console.log(
     JSON.stringify(
-      { ok: true, popupClipboard, popupToast, clipboard, lockedHeight },
+      { ok: true, optionsTheme, optionsMaterial, popupTheme, popupMaterial, popupClipboard, popupToast, clipboard, lockedHeight },
       null,
       2,
     ),

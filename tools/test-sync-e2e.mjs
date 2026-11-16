@@ -38,7 +38,7 @@ let b;
 try {
   a = await openExtension(profileA);
   const setupA = await a.page.evaluate(() =>
-    chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'alpha-password' }),
+    chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'SubVault-Test-2026!Qm7#' }),
   );
   if (!setupA?.ok) throw new Error(`A setup: ${setupA?.error}`);
   await a.page.evaluate(() =>
@@ -69,8 +69,12 @@ try {
   await popup.screenshot({ path: path.join(root, 'docs', 'popup-sync-import.png') });
   await popup.close();
 
+  await b.page.evaluate(() => {
+    const shield = document.getElementById('privacyShield');
+    if (shield) shield.hidden = true;
+  });
   await b.page.click('#gateImportChoose');
-  await b.page.fill('#gateImportPassword', 'alpha-password');
+  await b.page.fill('#gateImportPassword', 'SubVault-Test-2026!Qm7#');
   await b.page.click('#gateImportBtn');
   await b.page.waitForSelector('#gate', { state: 'hidden', timeout: 15000 });
   await b.page.waitForTimeout(300);
@@ -83,7 +87,7 @@ try {
 
   const a2 = await openExtension(profileA);
   const unlockA = await a2.page.evaluate(() =>
-    chrome.runtime.sendMessage({ type: 'SV_UNLOCK', password: 'alpha-password' }),
+    chrome.runtime.sendMessage({ type: 'SV_UNLOCK', password: 'SubVault-Test-2026!Qm7#' }),
   );
   if (!unlockA?.ok) throw new Error(`A unlock: ${unlockA?.error}`);
   await a2.page.evaluate(() =>
@@ -102,12 +106,17 @@ try {
   await a2.context.close();
 
   if (!live.entries?.some((entry) => entry.username === 'bob')) {
+    const dbg = await b.page.evaluate(async () => ({
+      status: await chrome.runtime.sendMessage({ type: 'SV_SYNC_STATUS' }),
+      settings: (await chrome.runtime.sendMessage({ type: 'SV_GET_SETTINGS' }))?.settings,
+    }));
+    console.log('LIVE_DEBUG', JSON.stringify(dbg));
     throw new Error('B did not receive the live update from A');
   }
 
   const a3 = await openExtension(profileA);
   const unlockA3 = await a3.page.evaluate(() =>
-    chrome.runtime.sendMessage({ type: 'SV_UNLOCK', password: 'alpha-password' }),
+    chrome.runtime.sendMessage({ type: 'SV_UNLOCK', password: 'SubVault-Test-2026!Qm7#' }),
   );
   if (!unlockA3?.ok) throw new Error(`A3 unlock: ${unlockA3?.error}`);
   await a3.page.evaluate(() =>

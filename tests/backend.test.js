@@ -89,7 +89,16 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
       host: 'mail.example.com',
       title: 'Mail',
       username: 'alice',
+      aliasEmail: 'alias@simplelogin.example',
+      aliasProvider: 'SimpleLogin',
       password: 'old-password',
+      fillSequence: [{ type: 'username' }, { type: 'wait', ms: 250 }, { type: 'password' }],
+      passkey: {
+        credentialId: 'cred-123',
+        rpId: 'example.com',
+        username: 'alice',
+        note: 'Windows Hello',
+      },
     },
   });
   assert.equal(added.ok, true);
@@ -103,6 +112,9 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
   assert.equal(matches.matches.length, 1);
   assert.equal(matches.isolated, false);
   assert.equal(matches.siteKey, 'example.com');
+  assert.equal(matches.matches[0].aliasEmail, 'alias@simplelogin.example');
+  assert.equal(matches.matches[0].aliasProvider, 'SimpleLogin');
+  assert.equal(matches.matches[0].hasPasskey, true);
 
   // A pending save from one subdomain is visible on another subdomain under the
   // default shared-parent rule (covers login -> redirect flows).
@@ -159,6 +171,19 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
   const fill = await send({ type: 'SV_FILL', id: entryId }, tab('https://drive.example.com/'));
   assert.equal(fill.ok, true);
   assert.equal(fill.password, 'new-password');
+  assert.deepEqual(fill.fillSequence, [
+    { type: 'username' },
+    { type: 'wait', ms: 250 },
+    { type: 'password' },
+  ]);
+  const secret = await send({ type: 'SV_GET_SECRET', id: entryId });
+  assert.equal(secret.ok, true);
+  assert.deepEqual(secret.passkey, {
+    credentialId: 'cred-123',
+    rpId: 'example.com',
+    username: 'alice',
+    note: 'Windows Hello',
+  });
 
   // Now isolate again: a new subdomain must not overwrite the mail record.
   await send({ type: 'SV_SET_SETTINGS', settings: { isolatedDomains: ['example.com'] } });
@@ -214,9 +239,10 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
   assert.equal(backup.independent, true);
   const backupJson = JSON.parse(backup.backup);
   assert.equal(backupJson.format, 'subvault-backup');
-  assert.equal(backupJson.version, 3);
+  assert.equal(backupJson.version, 4);
   assert.equal(Array.isArray(backupJson.entries), false);
   assert.equal(Boolean(backupJson.box?.data), true);
+  assert.equal(Boolean(backupJson.wrappedKey?.data), true);
 
   const restored = await send({
     type: 'SV_IMPORT_BACKUP',
@@ -308,7 +334,7 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
       port: '3000',
       title: 'Local',
       username: 'dev',
-      password: 'local-password',
+      password: 'SubVault-Test-2026!Qm7#',
     },
   });
   assert.equal(localCreated.ok, true);
@@ -338,4 +364,115 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
   assert.equal(wrong.ok, false);
   const unlocked = await send({ type: 'SV_UNLOCK', password: 'correct horse battery staple' });
   assert.equal(unlocked.ok, true);
+
+  const metaEntry = await send({
+    type: 'SV_ADD_ENTRY',
+    entry: {
+      host: 'favorite.example.com',
+      username: 'favorite-user',
+      password: 'favorite-password',
+      favorite: true,
+      folder: 'Work',
+      tags: ['finance', '常用'],
+    },
+  });
+  assert.equal(metaEntry.ok, true);
+  const listedMeta = await send({ type: 'SV_LIST_ENTRIES' });
+  const favorite = listedMeta.entries.find((entry) => entry.id === metaEntry.id);
+  assert.equal(favorite.favorite, true);
+  assert.equal(favorite.folder, 'Work');
+  assert.deepEqual(favorite.tags, ['finance', '常用']);
+  const toggled = await send({ type: 'SV_TOGGLE_FAVORITE', id: metaEntry.id });
+  assert.equal(toggled.favorite, false);
+  const bulkFavorite = await send({
+    type: 'SV_BULK_UPDATE',
+    ids: [metaEntry.id],
+    favorite: true,
+  });
+  assert.equal(bulkFavorite.updated, 1);
+  const bulkDeleted = await send({ type: 'SV_BULK_DELETE', ids: [metaEntry.id] });
+  assert.equal(bulkDeleted.deleted, 1);
+
+  // Travel mode hides entries from lists/matches without deleting them.
+  const travelEntry = await send({
+    type: 'SV_ADD_ENTRY',
+    entry: {
+      host: 'travel.example.com',
+      username: 'traveller',
+      password: 'travel-password',
+      tags: ['trip-secret'],
+    },
+  });
+  assert.equal(travelEntry.ok, true);
+  const travelOn = await send({
+    type: 'SV_SET_TRAVEL',
+    travel: { enabled: true, hiddenTags: ['trip-secret'] },
+  });
+  assert.equal(travelOn.ok, true);
+  assert.equal(travelOn.enabled, true);
+  const hiddenList = await send({ type: 'SV_LIST_ENTRIES' });
+  assert.equal(hiddenList.entries.some((entry) => entry.id === travelEntry.id), false);
+  const hiddenMatches = await send(
+    { type: 'SV_GET_MATCHES' },
+    tab('https://travel.example.com/'),
+  );
+  assert.equal(
+    hiddenMatches.matches.some((entry) => entry.id === travelEntry.id),
+    false,
+  );
+  const noPassword = await send({
+    type: 'SV_SET_TRAVEL',
+    travel: { enabled: false },
+  });
+  assert.equal(noPassword.ok, false);
+  const travelOff = await send({
+    type: 'SV_SET_TRAVEL',
+    travel: { enabled: false },
+    password: 'correct horse battery staple',
+  });
+  assert.equal(travelOff.ok, true);
+  const visibleAgain = await send({ type: 'SV_LIST_ENTRIES' });
+  assert.equal(visibleAgain.entries.some((entry) => entry.id === travelEntry.id), true);
+
+  const passkeyOnly = await send({
+    type: 'SV_ADD_ENTRY',
+    entry: {
+      host: 'passkey.example',
+      username: 'alice',
+      password: '',
+      passkey: { credentialId: 'pk-only', rpId: 'passkey.example', username: 'alice', note: 'security key' },
+    },
+  });
+  assert.equal(passkeyOnly.ok, true);
+  const passkeySecret = await send({ type: 'SV_GET_SECRET', id: passkeyOnly.id });
+  assert.equal(passkeySecret.ok, true);
+  assert.equal(passkeySecret.password, '');
+  assert.equal(passkeySecret.passkey.credentialId, 'pk-only');
+
+  const expiresAt = Date.now() + 3600000;
+  const expiredBackup = await send({
+    type: 'SV_EXPORT_BACKUP',
+    backupPassword: 'Backup-Expiry-Test-2026!Qm7',
+    backupExpiresAt: expiresAt,
+  });
+  assert.equal(expiredBackup.ok, true);
+  const expiredJson = JSON.parse(expiredBackup.backup);
+  assert.equal(expiredJson.version, 5);
+  assert.equal(expiredJson.expiresAt, expiresAt);
+
+  const tampered = JSON.parse(expiredBackup.backup);
+  tampered.expiresAt += 1000;
+  const tamperedImport = await send({
+    type: 'SV_IMPORT_BACKUP',
+    text: JSON.stringify(tampered),
+    password: 'Backup-Expiry-Test-2026!Qm7',
+  });
+  assert.equal(tamperedImport.ok, false);
+
+  const goodImport = await send({
+    type: 'SV_IMPORT_BACKUP',
+    text: expiredBackup.backup,
+    password: 'Backup-Expiry-Test-2026!Qm7',
+  });
+  assert.equal(goodImport.ok, true);
 });

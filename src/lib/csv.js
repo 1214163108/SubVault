@@ -214,6 +214,8 @@ export function csvToEntries(text, options = {}) {
   const format = detectFormat(headers);
   const urlIndex = findColumn(headers, URL_ALIASES);
   const usernameIndex = findColumn(headers, USERNAME_ALIASES);
+  const aliasIndex = findColumn(headers, ['aliasemail', 'alias', 'aliasaddress', 'maskedemail']);
+  const aliasProviderIndex = findColumn(headers, ['aliasprovider', 'providermail', 'aliaservice']);
   const passwordIndex = findColumn(headers, PASSWORD_ALIASES);
   const titleIndex = findColumn(headers, TITLE_ALIASES);
   const noteIndex = findColumn(headers, NOTE_ALIASES);
@@ -251,6 +253,8 @@ export function csvToEntries(text, options = {}) {
     const rawUrl = (row[urlIndex] || '').split(/\r?\n/)[0].trim();
     const password = row[passwordIndex] ?? '';
     const username = usernameIndex === -1 ? '' : (row[usernameIndex] ?? '').trim();
+    const aliasEmail = aliasIndex === -1 ? '' : (row[aliasIndex] ?? '').trim();
+    const aliasProvider = aliasProviderIndex === -1 ? '' : (row[aliasProviderIndex] ?? '').trim();
 
     if (!rawUrl || !password) {
       skipped += 1;
@@ -288,6 +292,8 @@ export function csvToEntries(text, options = {}) {
       port: normalizePort(parseHttpUrl(rawUrl)?.port || ''),
       scope: 'host',
       username: username.slice(0, 320),
+      aliasEmail: aliasEmail.slice(0, 320),
+      aliasProvider: aliasProvider.slice(0, 80),
       password,
       notes: notes.slice(0, 5000),
       url: rawUrl.slice(0, 2000),
@@ -324,11 +330,19 @@ function escapeCsv(value) {
  * encrypted backup export; CSV stays maximally compatible.
  */
 export function entriesToCsv(entries) {
-  const lines = ['name,url,username,password,note'];
+  const lines = ['name,url,username,password,note,alias_email,alias_provider'];
   for (const entry of entries) {
     const url = entry.url || `https://${entry.host}/`;
     lines.push(
-      [entry.title || entry.host, url, entry.username || '', entry.password || '', entry.notes || '']
+      [
+        entry.title || entry.host,
+        url,
+        entry.username || '',
+        entry.password || '',
+        entry.notes || '',
+        entry.aliasEmail || '',
+        entry.aliasProvider || '',
+      ]
         .map(escapeCsv)
         .join(','),
     );

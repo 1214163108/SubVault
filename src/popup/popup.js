@@ -1,8 +1,10 @@
 import {
   clearClipboard,
+  clipboardMessage,
   copyText,
   formatDateTime,
   makeToast,
+  readFileBase64,
   send,
 } from '../lib/client.js';
 import {
@@ -13,8 +15,12 @@ import {
   parseHttpUrl,
   suggestBaseDomain,
 } from '../lib/domain.js';
-import { generatePassword } from '../lib/generator.js';
+import { generatePassword, generatePin } from '../lib/generator.js';
 import { passwordStrength } from '../lib/crypto.js';
+import { evaluateMasterPassword } from '../lib/strength.js';
+import { applyI18n, installI18n, setUiLanguage } from '../lib/i18n.js';
+import { installPrivacyShield } from '../lib/privacy.js';
+import { assertDeviceCredential, describeVerificationError } from '../lib/webauthn.js';
 
 const $ = (id) => document.getElementById(id);
 const toast = makeToast($('toast'));
@@ -23,6 +29,7 @@ const ICON = {
   key: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14.5 3a6.5 6.5 0 0 0-6.2 8.5L3 16.8V21h4.2l1.2-1.2v-2.3h2.3l1.2-1.2V15l1.4-.7A6.5 6.5 0 1 0 14.5 3Zm2.4 4.6a1.7 1.7 0 1 1 0 3.4 1.7 1.7 0 0 1 0-3.4Z"/></svg>',
   copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 3h9a3 3 0 0 1 3 3v11h-2V6a1 1 0 0 0-1-1H8V3Zm-2 4h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm0 2v10h9V9H6Z"/></svg>',
   user: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm0 2c-4.2 0-7.5 2.1-7.5 4.8V21h15v-2.2C19.5 16.1 16.2 14 12 14Z"/></svg>',
+  totp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8Zm1-13h-2v6l5 3 .9-1.6-3.9-2.3Z"/></svg>',
 };
 
 const state = {
@@ -37,6 +44,11 @@ const state = {
   siteKey: '',
   isolated: false,
   stats: null,
+  genValue: '',
+  totpEntryId: '',
+  totpRemaining: 0,
+  totpPeriod: 30,
+  totpTimer: 0,
 };
 
 const views = {
@@ -52,6 +64,21 @@ function setView(name) {
   }
   document.body.dataset.view = name;
   document.querySelector('.app')?.classList.toggle('is-vault', name === 'vault');
+}
+
+function applyTheme(theme = 'system') {
+  const value = ['system', 'light', 'dark'].includes(theme) ? theme : 'system';
+  if (value === 'system') {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = value;
+  }
+}
+
+function applyMaterial(material = 'solid') {
+  document.documentElement.dataset.material = ['solid', 'glass', 'liquid'].includes(material)
+    ? material
+    : 'solid';
 }
 
 function setError(element, message) {
@@ -78,6 +105,109 @@ function updateStrength(input, bar, text) {
   text.textContent = result.label;
 }
 
+let masterStrengthToken = 0;
+
+async function updateMasterStrength(input, bar, text) {
+  if (!input || !bar || !text) return;
+  const value = input.value;
+  const hint = $('setupStrengthHint');
+  const ackLabel = $('setupStrengthAckLabel');
+  if (!value) {
+    bar.style.width = '0%';
+    bar.style.background = '#94a3b8';
+    text.textContent = '未输入';
+    if (hint) {
+      hint.hidden = true;
+      hint.textContent = '';
+    }
+    if (ackLabel) ackLabel.hidden = true;
+    return;
+  }
+  const token = ++masterStrengthToken;
+  const result = await evaluateMasterPassword(value);
+  if (token !== masterStrengthToken || input.value !== value) return;
+  bar.style.width = `${result.percent}%`;
+  bar.style.background = scoreColor(result.score);
+  text.textContent = `${result.label} · 约 ${Math.round(result.bits)} bits`;
+  if (hint) {
+    hint.hidden = !result.message;
+    hint.textContent = result.message || '';
+    hint.classList.toggle('is-danger', result.blocked);
+  }
+  if (ackLabel) {
+    ackLabel.hidden = !result.needsConfirm;
+    if (!result.needsConfirm) $('setupStrengthAck').checked = false;
+  }
+}
+
+function currentGenOptions() {
+  const pin = Boolean($('genPin').checked);
+  return {
+    pin,
+    length: Number($('genLength').value) || 20,
+    lower: !pin && $('genLower').checked,
+    upper: !pin && $('genUpper').checked,
+    digits: pin || $('genDigits').checked,
+    symbols: !pin && $('genSymbols').checked,
+    readable: Boolean($('genReadable').checked),
+  };
+}
+
+function applyGenOptions(options = {}) {
+  const value = { ...currentGenOptions(), ...options };
+  $('genLength').value = String(value.length);
+  $('genLengthValue').textContent = String(value.length);
+  $('genLower').checked = Boolean(value.lower);
+  $('genUpper').checked = Boolean(value.upper);
+  $('genDigits').checked = Boolean(value.digits);
+  $('genSymbols').checked = Boolean(value.symbols);
+  $('genPin').checked = Boolean(value.pin);
+  $('genReadable').checked = Boolean(value.readable);
+}
+
+let genSaveTimer = null;
+function rememberGenOptions() {
+  clearTimeout(genSaveTimer);
+  genSaveTimer = setTimeout(() => {
+    void send('SV_SET_SETTINGS', { settings: { generatorOptions: currentGenOptions() } }).catch(
+      () => {},
+    );
+  }, 400);
+}
+
+function regenerateStandalone() {
+  const options = currentGenOptions();
+  rememberGenOptions();
+  let password = '';
+  if (options.pin) {
+    password = generatePin(options.length);
+  } else {
+    const classes = [options.lower, options.upper, options.digits, options.symbols].filter(Boolean);
+    if (classes.length === 0) {
+      $('genLower').checked = true;
+      options.lower = true;
+    }
+    password = generatePassword({
+      length: options.length,
+      lower: options.lower,
+      upper: options.upper,
+      digits: options.digits,
+      symbols: options.symbols,
+      readable: options.readable,
+    });
+  }
+  $('genLengthValue').textContent = String(options.length);
+  $('genOutput').textContent = password;
+  state.genValue = password;
+  return password;
+}
+
+function openGenDialog() {
+  applyGenOptions(state.settings?.generatorOptions || {});
+  $('genDialog').showModal();
+  regenerateStandalone();
+}
+
 function setBusy(button, busy, label) {
   if (!button) return;
   if (busy) {
@@ -91,6 +221,8 @@ function setBusy(button, busy, label) {
 }
 
 async function init() {
+  installI18n(document.body);
+  installPrivacyShield();
   bindEvents();
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0];
@@ -119,6 +251,10 @@ async function refresh() {
   state.initialized = Boolean(result.initialized);
   state.locked = Boolean(result.locked);
   state.settings = result.settings || {};
+  setUiLanguage(state.settings.uiLanguage || 'auto');
+  applyI18n(document.body);
+  applyTheme(state.settings.theme);
+  applyMaterial(state.settings.material);
 
   if (!state.initialized) {
     $('lockBtn').hidden = true;
@@ -134,6 +270,8 @@ async function refresh() {
     $('lockBtn').hidden = true;
     setView('locked');
     const minutes = Number(state.settings.autoLockMinutes);
+    renderUnlockVaults(result);
+    void refreshDeviceUnlock(result);
     $('autoLockHint').textContent =
       Number.isFinite(minutes) && minutes > 0
         ? `空闲 ${minutes} 分钟后自动锁定；主密码只在本机使用。`
@@ -150,6 +288,7 @@ async function refresh() {
   state.isolated = Boolean(result.isolated);
   state.stats = result.stats || null;
   renderVault();
+  void refreshProfiles();
   setView('vault');
 }
 
@@ -164,6 +303,49 @@ async function detectPopupImport() {
   }
   $('setupForm').hidden = false;
   $('setupPassword').focus();
+}
+
+async function refreshProfiles() {
+  const bar = $('profileBar');
+  const select = $('profileSelect');
+  if (!bar || !select) return;
+  const result = await send('SV_LIST_PROFILES');
+  if (!result.ok) {
+    bar.hidden = true;
+    return;
+  }
+  const profiles = Array.isArray(result.profiles) ? result.profiles : [];
+  select.replaceChildren();
+  for (const profile of profiles) {
+    const option = document.createElement('option');
+    option.value = profile.id;
+    option.textContent = profile.name;
+    select.append(option);
+  }
+  bar.hidden = profiles.length === 0;
+}
+
+async function fillProfile() {
+  const id = $('profileSelect')?.value;
+  if (!id || !state.tabId) {
+    toast('当前页面不支持填充');
+    return;
+  }
+  const result = await new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(state.tabId, { type: 'SV_FILL_PROFILE_BY_ID', id }, (response) => {
+        void chrome.runtime.lastError;
+        resolve(response || { ok: false });
+      });
+    } catch {
+      resolve({ ok: false });
+    }
+  });
+  if (!result.ok) {
+    toast(result.error || '没有找到可填入的资料字段', { error: true });
+    return;
+  }
+  toast('身份资料', '已填入当前页面');
 }
 
 function setSyncPromptDismissed(value) {
@@ -256,13 +438,17 @@ function renderPending() {
     const card = document.createElement('div');
     card.className = 'pending-card';
 
+    const kicker = document.createElement('div');
+    kicker.className = 'pending-kicker';
+    kicker.textContent = item.existing ? '更新登录密码' : '保存新账号';
+
     const title = document.createElement('div');
     title.className = 'pending-title';
-    title.textContent = item.existing ? '要更新这次登录的密码吗？' : '保存这次登录？';
+    title.textContent = item.username || item.host;
 
     const sub = document.createElement('div');
     sub.className = 'pending-sub';
-    sub.textContent = `${item.username || '无用户名'} · ${item.host}${
+    sub.textContent = `${item.host}${
       item.createdAt ? ` · ${formatDateTime(item.createdAt)}` : ''
     }`;
 
@@ -271,7 +457,7 @@ function renderPending() {
     const save = document.createElement('button');
     save.type = 'button';
     save.className = 'btn primary';
-    save.textContent = '保存';
+    save.textContent = item.existing ? '更新账号' : '保存账号';
     save.addEventListener('click', () => void savePending(item.id, save));
     const dismiss = document.createElement('button');
     dismiss.type = 'button';
@@ -280,7 +466,7 @@ function renderPending() {
     dismiss.addEventListener('click', () => void dismissPending(item.id));
     actions.append(save, dismiss);
 
-    card.append(title, sub, actions);
+    card.append(kicker, title, sub, actions);
     container.appendChild(card);
   }
 }
@@ -330,10 +516,85 @@ function renderMatches() {
         toast(error?.message || '复制密码失败', { error: true });
       }
     });
+    if (entry.hasTotp) {
+      const totpButton = iconButton(ICON.totp, '动态验证码', 'totp');
+      totpButton.addEventListener('click', () => void openTotp(entry));
+      actions.append(totpButton);
+    }
     actions.append(fill, copyUser, copyPasswordButton);
 
     row.append(avatar, body, actions);
     container.appendChild(row);
+  }
+}
+
+function updatePopupTotpProgress() {
+  const bar = $('totpProgressBar');
+  if (!bar) return;
+  const ratio = state.totpPeriod > 0 ? Math.max(0, Math.min(1, state.totpRemaining / state.totpPeriod)) : 0;
+  bar.style.width = `${ratio * 100}%`;
+  bar.dataset.low = ratio <= 0.2 ? 'true' : 'false';
+}
+
+async function refreshPopupTotp() {
+  if (!state.totpEntryId) return;
+  const result = await send('SV_GET_TOTP_CODE', { id: state.totpEntryId });
+  if (!result.ok) {
+    toast(result.error || '无法生成动态码', { error: true });
+    closeTotp();
+    return;
+  }
+  $('totpCode').textContent = result.code;
+  state.totpRemaining = result.remaining;
+  state.totpPeriod = Number(result.period) || 30;
+  updatePopupTotpProgress();
+  $('totpMeta').textContent = `${result.username || '无用户名'} · ${result.remaining} 秒后刷新`;
+}
+
+async function openTotp(entry) {
+  const result = await send('SV_GET_TOTP_CODE', { id: entry.id });
+  if (!result.ok) {
+    toast(result.error || '无法生成动态码', { error: true });
+    return;
+  }
+  clearInterval(state.totpTimer);
+  state.totpEntryId = entry.id;
+  $('totpTitle').textContent = `${entry.title || entry.host} 的动态码`;
+  $('totpCode').textContent = result.code;
+  state.totpRemaining = result.remaining;
+  state.totpPeriod = Number(result.period) || 30;
+  updatePopupTotpProgress();
+  $('totpMeta').textContent = `${result.username || '无用户名'} · ${result.remaining} 秒后刷新`;
+  $('totpDialog').showModal();
+  state.totpTimer = setInterval(() => {
+    state.totpRemaining -= 1;
+    if (state.totpRemaining <= 0) {
+      void refreshPopupTotp();
+      return;
+    }
+    updatePopupTotpProgress();
+    $('totpMeta').textContent = `${result.username || '无用户名'} · ${state.totpRemaining} 秒后刷新`;
+  }, 1000);
+}
+
+function closeTotp() {
+  clearInterval(state.totpTimer);
+  state.totpTimer = 0;
+  state.totpEntryId = '';
+  state.totpRemaining = 0;
+  updatePopupTotpProgress();
+  $('totpCode').textContent = '------';
+  $('totpMeta').textContent = '';
+}
+
+async function copyTotp() {
+  const code = $('totpCode').textContent;
+  if (!code || code === '------') return;
+  try {
+    await copyText(code);
+    toast(clipboardMessage('动态码已复制', 30));
+  } catch (error) {
+    toast(error?.message || '复制动态码失败', { error: true });
   }
 }
 
@@ -348,6 +609,7 @@ function iconButton(svg, title, extraClass = '') {
 }
 
 async function savePending(id, button) {
+  const pending = state.pending.find((item) => item.id === id);
   setBusy(button, true, '保存中…');
   const result = await send('SV_SAVE_PENDING', { id });
   if (!result.ok) {
@@ -355,7 +617,9 @@ async function savePending(id, button) {
     toast(result.error || '保存失败', { error: true });
     return;
   }
-  toast('已保存到本机密码库');
+  const account = pending?.username || '当前账号';
+  const action = result.updated ? '更新' : '新增';
+  toast(account, `已${action}账号 · ${pending?.host || state.host}`);
   await refresh();
 }
 
@@ -384,7 +648,8 @@ async function fillEntry(id) {
       toast(result.error || '填充失败，请刷新页面后重试', { error: true });
       return;
     }
-    toast('已填充');
+    const entry = state.matches.find((item) => item.id === id);
+    toast(entry?.username || entry?.title || '当前账号', '已填入账号');
     setTimeout(() => window.close(), 320);
   } catch (error) {
     toast(error?.message || '填充失败', { error: true });
@@ -410,10 +675,9 @@ async function copyValue(value, message) {
     return;
   }
   try {
-    const ok = await copyText(value, {
-      clearAfterSeconds: Number(state.settings.clipboardClearSeconds) || 0,
-    });
-    toast(ok ? message : '复制失败，请手动选择', { error: !ok });
+    const seconds = Number(state.settings.clipboardClearSeconds) || 0;
+    const ok = await copyText(value, { clearAfterSeconds: seconds });
+    toast(ok ? clipboardMessage(message, seconds) : '复制失败，请手动选择', { error: !ok });
   } catch (error) {
     toast(error?.message || '复制失败，请手动选择', { error: true });
   }
@@ -510,9 +774,32 @@ async function setupVault() {
     setError($('setupError'), '请确认你已了解主密码无法找回');
     return;
   }
+  const strength = await evaluateMasterPassword(password);
+  if (strength.blocked) {
+    setError($('setupError'), strength.message || '主密码强度不足，请更换更长的随机密码');
+    return;
+  }
+  if (strength.needsConfirm && !$('setupStrengthAck').checked) {
+    setError($('setupError'), strength.message || '该主密码强度一般，请勾选确认后继续');
+    return;
+  }
+  let keyFileBase64 = '';
+  if ($('setupKeyFileToggle').checked) {
+    const file = $('setupKeyFile').files?.[0];
+    if (!file) {
+      setError($('setupError'), '请选择密钥文件，或取消勾选');
+      return;
+    }
+    try {
+      keyFileBase64 = await readFileBase64(file);
+    } catch {
+      setError($('setupError'), '无法读取密钥文件');
+      return;
+    }
+  }
   const button = $('setupBtn');
   setBusy(button, true, '正在创建加密密码库…');
-  const result = await send('SV_SETUP', { password });
+  const result = await send('SV_SETUP', { password, keyFileBase64 });
   setBusy(button, false);
   if (!result.ok) {
     setError($('setupError'), result.error || '创建失败');
@@ -520,9 +807,78 @@ async function setupVault() {
   }
   $('setupPassword').value = '';
   $('setupConfirm').value = '';
-  updateStrength($('setupPassword'), $('setupStrengthBar'), $('setupStrengthText'));
+  $('setupStrengthAck').checked = false;
+  $('setupKeyFileToggle').checked = false;
+  $('setupKeyFileRow').hidden = true;
+  if ($('setupKeyFile')) $('setupKeyFile').value = '';
+  void updateMasterStrength($('setupPassword'), $('setupStrengthBar'), $('setupStrengthText'));
   toast('密码库已创建，数据仅保存在本机');
   await refresh();
+}
+
+function renderUnlockVaults(result) {
+  const row = $('unlockVaultRow');
+  const select = $('unlockVaultSelect');
+  if (!row || !select) return;
+  const vaults = Array.isArray(result.vaults) ? result.vaults : [];
+  select.replaceChildren();
+  for (const vault of vaults) {
+    const option = document.createElement('option');
+    option.value = vault.id;
+    option.textContent = vault.name;
+    option.dataset.keyFile = vault.keyFile ? '1' : '';
+    select.append(option);
+  }
+  const activeId = result.activeVaultId || vaults[0]?.id;
+  if (activeId && vaults.some((vault) => vault.id === activeId)) select.value = activeId;
+  row.hidden = vaults.length <= 1;
+  syncUnlockVaultMeta();
+}
+
+function syncUnlockVaultMeta() {
+  const select = $('unlockVaultSelect');
+  if (!select) return;
+  const option = select.selectedOptions?.[0];
+  $('unlockKeyFileRow').hidden = option?.dataset.keyFile !== '1';
+  void refreshDeviceUnlock();
+}
+
+async function refreshDeviceUnlock(result = null) {
+  const row = $('deviceUnlockRow');
+  const hint = $('deviceUnlockHint');
+  if (!row) return;
+  const vaultId = $('unlockVaultSelect')?.value || result?.activeVaultId || '';
+  const status = await send('SV_DEVICE_STATUS', { vaultId });
+  const available = Boolean(status.ok && status.supported && status.exists);
+  row.hidden = !available;
+  $('deviceUnlockBtn').dataset.credentialId = status.credentialId || '';
+  if (available && hint) {
+    hint.textContent = status.credentialId
+      ? '需要 Windows Hello 验证；绑定仅在本机有效，不保存主密码。'
+      : '设备绑定仅在本机有效，不保存主密码，也不会同步。';
+  }
+}
+
+async function unlockWithDevice() {
+  const button = $('deviceUnlockBtn');
+  if (!button) return;
+  button.disabled = true;
+  setError($('unlockError'), '');
+  const vaultId = $('unlockVaultSelect')?.value || '';
+  try {
+    const credentialId = button.dataset.credentialId || '';
+    if (credentialId) await assertDeviceCredential(credentialId);
+    const result = await send('SV_DEVICE_UNLOCK', { vaultId });
+    if (!result.ok) {
+      setError($('unlockError'), result.error || '设备快速解锁失败，请使用主密码解锁');
+      return;
+    }
+    await refresh();
+  } catch (error) {
+    setError($('unlockError'), error?.name ? describeVerificationError(error) : (error?.message || '设备快速解锁失败，请使用主密码解锁'));
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function unlockVault() {
@@ -532,9 +888,24 @@ async function unlockVault() {
     setError($('unlockError'), '请输入主密码');
     return;
   }
+  let keyFileBase64 = '';
+  if (!$('unlockKeyFileRow').hidden) {
+    const file = $('unlockKeyFile').files?.[0];
+    if (!file) {
+      setError($('unlockError'), '请选择密钥文件');
+      return;
+    }
+    try {
+      keyFileBase64 = await readFileBase64(file);
+    } catch {
+      setError($('unlockError'), '无法读取密钥文件');
+      return;
+    }
+  }
   const button = $('unlockBtn');
   setBusy(button, true, '正在解锁…');
-  const result = await send('SV_UNLOCK', { password });
+  const vaultId = $('unlockVaultSelect')?.value || '';
+  const result = await send('SV_UNLOCK', { password, keyFileBase64, vaultId });
   setBusy(button, false);
   if (!result.ok) {
     setError($('unlockError'), result.error || '解锁失败');
@@ -558,9 +929,56 @@ function bindRevealButtons() {
 }
 
 function bindEvents() {
+  $('setupKeyFileToggle')?.addEventListener('change', () => {
+    const on = $('setupKeyFileToggle').checked;
+    $('setupKeyFileRow').hidden = !on;
+  });
   bindRevealButtons();
 
+  $('genBtn').addEventListener('click', openGenDialog);
+  $('totpClose').addEventListener('click', () => $('totpDialog').close());
+  $('totpDialog').addEventListener('close', closeTotp);
+  $('totpDialog').addEventListener('click', (event) => {
+    if (event.target === $('totpDialog')) $('totpDialog').close();
+  });
+  $('totpCopyBtn').addEventListener('click', () => void copyTotp());
+
+  $('genClose').addEventListener('click', () => $('genDialog').close());
+  $('genDialog').addEventListener('click', (event) => {
+    if (event.target === $('genDialog')) $('genDialog').close();
+  });
+  $('genLength').addEventListener('input', regenerateStandalone);
+  for (const id of ['genLower', 'genUpper', 'genDigits', 'genSymbols', 'genReadable', 'genPin']) {
+    $(id).addEventListener('change', () => {
+      if (id === 'genPin' && $('genPin').checked) {
+        $('genLower').checked = false;
+        $('genUpper').checked = false;
+        $('genSymbols').checked = false;
+      }
+      regenerateStandalone();
+    });
+  }
+  $('genRegenerate').addEventListener('click', regenerateStandalone);
+  $('genCopy').addEventListener('click', async () => {
+    if (!state.genValue) regenerateStandalone();
+    const ok = await copyText(state.genValue);
+    toast(ok ? '密码已复制' : '复制失败，请手动选择', { error: !ok });
+  });
+  $('genUse').addEventListener('click', () => {
+    if (!state.genValue) regenerateStandalone();
+    const password = state.genValue;
+    $('genDialog').close();
+    openEntryDialog();
+    $('entryPassword').value = password;
+    $('entryPassword').type = 'text';
+    $('entryReveal').textContent = '隐藏';
+    updateStrength($('entryPassword'), $('entryStrengthBar'), $('entryStrengthText'));
+  });
+
   $('unlockBtn').addEventListener('click', () => void unlockVault());
+  $('deviceUnlockBtn')?.addEventListener('click', () => void unlockWithDevice());
+  $('unlockVaultSelect')?.addEventListener('change', syncUnlockVaultMeta);
+  $('profileFillBtn')?.addEventListener('click', () => void fillProfile());
   $('unlockPassword').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') void unlockVault();
   });
@@ -587,7 +1005,7 @@ function bindEvents() {
   $('syncImportConfirm').addEventListener('click', () => void importPopupVault());
   $('syncPullBtn').addEventListener('click', () => void syncPopupExisting());
   $('setupPassword').addEventListener('input', () => {
-    updateStrength($('setupPassword'), $('setupStrengthBar'), $('setupStrengthText'));
+    void updateMasterStrength($('setupPassword'), $('setupStrengthBar'), $('setupStrengthText'));
   });
   $('setupPassword').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') void setupVault();

@@ -6,6 +6,7 @@ import {
   generateTotp,
   isValidTotpSecret,
   normalizeTotpSecret,
+  parseOtpAuthUri,
 } from '../src/lib/totp.js';
 
 test('Base32 normalization and validation', () => {
@@ -31,4 +32,17 @@ test('six-digit code has correct shape and countdown', async () => {
   assert.equal(result.code.length, 6);
   assert.equal(/^\d{6}$/.test(result.code), true);
   assert.equal(result.remaining >= 1 && result.remaining <= 30, true);
+});
+
+test('otpauth URI carries digits, period and algorithm', () => {
+  const otp = parseOtpAuthUri(
+    'otpauth://totp/ACME:alice?secret=JBSWY3DPEHPK3PXP&issuer=ACME&digits=8&period=60&algorithm=SHA256',
+  );
+  assert.equal(otp.secret, 'JBSWY3DPEHPK3PXP');
+  assert.equal(otp.digits, 8);
+  assert.equal(otp.period, 60);
+  assert.equal(otp.algorithm, 'SHA256');
+  assert.equal(otp.issuer, 'ACME');
+  assert.equal(otp.account, 'alice');
+  assert.equal(parseOtpAuthUri('JBSWY3DPEHPK3PXP'), null);
 });

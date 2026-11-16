@@ -9,8 +9,10 @@ import {
   encryptJSON,
   isCommonPassword,
   passwordStrength,
+  sha256Hex,
 } from '../src/lib/crypto.js';
-import { generatePassword } from '../src/lib/generator.js';
+import { generatePassword, generatePin } from '../src/lib/generator.js';
+import { isWeakPasswordHash } from '../src/vendor/weak-passwords.js';
 
 test('new KDF parameters use SHA-512 and a 32-byte random salt', () => {
   const params = createKdfParams();
@@ -50,4 +52,39 @@ test('generator uses the expanded symbol set and requested length', () => {
   assert.equal(password.length, 40);
   assert.equal([...password].every((char) => symbols.includes(char)), true);
   assert.equal(generatePassword({ length: 8 }).length, 8);
+});
+
+test('readable mode excludes ambiguous characters, full mode keeps them', () => {
+  const readable = generatePassword({
+    length: 200,
+    lower: true,
+    upper: true,
+    digits: true,
+    symbols: false,
+    readable: true,
+  });
+  assert.equal(/[IlO01]/.test(readable), false);
+
+  const full = generatePassword({
+    length: 400,
+    lower: true,
+    upper: true,
+    digits: true,
+    symbols: false,
+    readable: false,
+  });
+  assert.equal(/[IlO01]/.test(full), true);
+});
+
+test('PIN generation is numeric and uses the requested length', () => {
+  const pin = generatePin(12);
+  assert.equal(pin.length, 12);
+  assert.equal(/^[0-9]+$/.test(pin), true);
+  assert.equal(generatePin(4).length, 4);
+});
+
+test('offline common-password digest list matches known weak passwords', async () => {
+  assert.equal(isWeakPasswordHash(await sha256Hex('password')), true);
+  assert.equal(isWeakPasswordHash(await sha256Hex('123456')), true);
+  assert.equal(isWeakPasswordHash(await sha256Hex('SubVault-Test-2026!Qm7#')), false);
 });

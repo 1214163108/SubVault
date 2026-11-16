@@ -37,6 +37,44 @@
   }
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --text: #0f172a;
+  --muted: #64748b;
+  --faint: #94a3b8;
+  --line: rgba(15, 23, 42, 0.09);
+  --line-soft: rgba(15, 23, 42, 0.06);
+  --accent: #4f46e5;
+  --accent-strong: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-border: #e0e7ff;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b1120;
+  --surface: #111827;
+  --surface-2: #1f2937;
+  --text: #f1f5f9;
+  --muted: #94a3b8;
+  --faint: #64748b;
+  --line: rgba(255, 255, 255, 0.1);
+  --line-soft: rgba(255, 255, 255, 0.07);
+  --accent: #818cf8;
+  --accent-strong: #a5b4fc;
+  --accent-soft: rgba(99, 102, 241, 0.16);
+  --accent-border: rgba(99, 102, 241, 0.28);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.12);
+  --shadow: 0 18px 45px rgba(0, 0, 0, 0.4);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -604,8 +642,18 @@ textarea {
 }
 
 .pending-title {
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.3;
+}
+
+.pending-kicker {
+  margin-bottom: 2px;
+  font-size: 9.5px;
   font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--warning);
 }
 
 .pending-sub {
@@ -814,17 +862,29 @@ textarea {
   left: 50%;
   bottom: 14px;
   transform: translateX(-50%);
-  max-width: 330px;
-  padding: 8px 14px;
-  border-radius: 999px;
+  max-width: 340px;
+  padding: 9px 14px;
+  border-radius: 12px;
   background: rgba(15, 23, 42, 0.94);
   color: #f8fafc;
   font-size: 11px;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.28);
   z-index: 30;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.toast-title {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.toast-detail {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: rgba(248, 250, 252, 0.72);
 }
 
 .toast.is-error {
@@ -899,4 +959,232 @@ textarea {
     background: rgba(255, 255, 255, 0.08);
     border-color: rgba(255, 255, 255, 0.12);
   }
+}
+
+:root[data-theme="light"] .pending-card {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: #fffbeb;
+  color: #78350f;
+}
+:root[data-theme="light"] .pending-actions .btn {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: var(--line);
+}
+:root[data-theme="dark"] .pending-card {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+:root[data-theme="dark"] .pending-actions .btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+:root[data-material="glass"] body {
+  background-image: linear-gradient(145deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 45%);
+}
+:root[data-material="glass"] .site-card,
+:root[data-material="glass"] .entry-row,
+:root[data-material="glass"] .pending-card,
+:root[data-material="glass"] .dialog,
+:root[data-material="glass"] .toast {
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  border-color: color-mix(in srgb, var(--line) 65%, rgba(255,255,255,.35));
+}
+:root[data-material="liquid"] body {
+  background-image:
+    radial-gradient(120% 70% at 0% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 55%),
+    radial-gradient(90% 65% at 100% 20%, rgba(236,72,153,.12), transparent 60%);
+  background-attachment: fixed;
+}
+:root[data-material="liquid"] .site-card,
+:root[data-material="liquid"] .entry-row,
+:root[data-material="liquid"] .pending-card,
+:root[data-material="liquid"] .dialog,
+:root[data-material="liquid"] .toast {
+  background:
+    radial-gradient(130% 90% at 8% 0%, rgba(255,255,255,.7), transparent 52%),
+    linear-gradient(135deg, color-mix(in srgb, var(--surface) 76%, transparent), color-mix(in srgb, var(--accent-soft) 58%, transparent));
+  -webkit-backdrop-filter: blur(26px) saturate(185%);
+  backdrop-filter: blur(26px) saturate(185%);
+  border-color: rgba(255,255,255,.5);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.65), var(--shadow);
+}
+:root[data-theme="dark"][data-material="liquid"] .site-card,
+:root[data-theme="dark"][data-material="liquid"] .entry-row,
+:root[data-theme="dark"][data-material="liquid"] .pending-card,
+:root[data-theme="dark"][data-material="liquid"] .dialog {
+  background:
+    radial-gradient(130% 90% at 8% 0%, rgba(129,140,248,.2), transparent 55%),
+    linear-gradient(135deg, rgba(17,24,39,.9), rgba(30,27,75,.76));
+  border-color: rgba(165,180,252,.25);
+}
+
+/* Glass/liquid toasts use a light surface in light theme, so the default
+   white toast text would disappear. Follow the page foreground instead. */
+:root[data-material="glass"] .toast,
+:root[data-material="liquid"] .toast {
+  color: var(--text);
+}
+:root[data-material="glass"] .toast .toast-detail,
+:root[data-material="liquid"] .toast .toast-detail {
+  color: var(--muted);
+}
+:root[data-material="glass"] .toast.is-error,
+:root[data-material="liquid"] .toast.is-error {
+  background: #b91c1c;
+  color: #fff;
+}
+:root[data-material="glass"] .toast.is-error .toast-detail,
+:root[data-material="liquid"] .toast.is-error .toast-detail {
+  color: rgba(255,255,255,.82);
+}
+
+/* Standalone password generator (v1.4.1) */
+.actions-row .gen-btn {
+  flex: 0 0 42px;
+  padding: 0;
+  font-size: 14px;
+}
+
+.gen-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 10px;
+  margin: 10px 0 2px;
+}
+
+.gen-options .check {
+  margin: 0;
+}
+
+.gen-output {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+  background: var(--accent-soft);
+}
+
+.gen-output code {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.gen-output .btn {
+  flex: none;
+  margin: 0;
+  padding: 5px 9px;
+}
+
+.fineprint.is-danger {
+  color: #dc2626;
+}
+
+.privacy-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 16, 24, 0.55);
+  backdrop-filter: blur(18px) saturate(0.6);
+  cursor: pointer;
+  outline: none;
+}
+
+.privacy-shield[hidden] {
+  display: none;
+}
+
+.privacy-shield-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 24px;
+  border-radius: 14px;
+  background: rgba(20, 26, 38, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f4f6fb;
+  font-size: 13px;
+  text-align: center;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+.privacy-shield-card strong {
+  font-size: 15px;
+}
+
+.profile-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+.profile-bar > span {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.profile-bar select {
+  flex: 1;
+  min-width: 0;
+}
+
+.device-unlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+
+.totp-body {
+  text-align: center;
+}
+
+.totp-code {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: 5px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.totp-progress {
+  width: 70%;
+  height: 4px;
+  margin: 0 auto 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.14));
+}
+
+#totpProgressBar {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 1s linear, background 0.2s ease;
+}
+
+#totpProgressBar[data-low="true"] {
+  background: #dc2626;
+}
+
+.totp-body .button-row {
+  justify-content: center;
+  margin-top: 12px;
 }

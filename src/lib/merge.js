@@ -131,6 +131,23 @@ export function mergeEntries(existingEntries, incomingEntries, options = {}) {
         entry.passwordChangedAt = winnerTime;
         entry.updatedAt = now;
         entry.source = source;
+        if (winner.favorite !== undefined) entry.favorite = Boolean(winner.favorite);
+        if (Array.isArray(winner.tags) && winner.tags.length) entry.tags = winner.tags;
+        if (winner.folder) entry.folder = winner.folder;
+        if (winner.aliasEmail) entry.aliasEmail = winner.aliasEmail;
+        if (winner.aliasProvider) entry.aliasProvider = winner.aliasProvider;
+        if (Array.isArray(winner.fillSequence) && winner.fillSequence.length) {
+          entry.fillSequence = winner.fillSequence;
+        }
+        if (winner.passkey && (winner.passkey.credentialId || winner.passkey.rpId)) {
+          entry.passkey = winner.passkey;
+        }
+        if (winner.totpSecret) {
+          entry.totpSecret = winner.totpSecret;
+          entry.totpDigits = winner.totpDigits || 6;
+          entry.totpPeriod = winner.totpPeriod || 30;
+          entry.totpAlgorithm = winner.totpAlgorithm || 'SHA1';
+        }
         updated += 1;
       }
     }
@@ -144,9 +161,20 @@ export function mergeEntries(existingEntries, incomingEntries, options = {}) {
         host,
         port: normalizePort(winner.port),
         username: winner.username || '',
+        aliasEmail: winner.aliasEmail || '',
+        aliasProvider: winner.aliasProvider || '',
+        fillSequence: Array.isArray(winner.fillSequence) ? winner.fillSequence : [],
+        passkey: winner.passkey || null,
         password: winner.password,
         notes: winner.notes || '',
         url: winner.url || `https://${host}/`,
+        totpSecret: winner.totpSecret || '',
+        totpDigits: winner.totpDigits || 6,
+        totpPeriod: winner.totpPeriod || 30,
+        totpAlgorithm: winner.totpAlgorithm || 'SHA1',
+        favorite: Boolean(winner.favorite),
+        tags: Array.isArray(winner.tags) ? winner.tags : [],
+        folder: winner.folder || '',
         source,
         createdAt: now,
         updatedAt: now,

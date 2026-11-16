@@ -65,7 +65,7 @@ try {
   await options.goto(`chrome-extension://${extensionId}/src/options/options.html`);
   await options.waitForFunction(() => Boolean(window.chrome?.runtime?.id));
   const setup = await options.evaluate(() =>
-    chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'save-password' }),
+    chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'SubVault-Test-2026!Qm7#' }),
   );
   if (!setup?.ok) throw new Error(`setup: ${setup?.error}`);
   await options.evaluate(() =>
@@ -137,9 +137,21 @@ try {
   if (bannerFrames !== 1) {
     throw new Error(`save banner should only appear once, got ${bannerFrames}`);
   }
+  const createKicker = await createBanner.locator('.sv-banner-kicker').textContent();
   const createTitle = await createBanner.locator('.sv-banner-title').textContent();
+  if (createKicker !== '保存新账号' || createTitle !== 'new-user') {
+    throw new Error(`save banner hierarchy failed: ${createKicker} / ${createTitle}`);
+  }
   await createBanner.locator('[data-subvault-save]').click();
   await page.waitForTimeout(500);
+  const createToast = await page.evaluate(
+    () =>
+      document.getElementById('subvault-ui-root')?.shadowRoot?.querySelector('.sv-toast')
+        ?.textContent || '',
+  );
+  if (!createToast.includes('new-user') || !createToast.includes('新增账号')) {
+    throw new Error(`new account toast not detailed: ${createToast}`);
+  }
   const created = await options.evaluate(() => chrome.runtime.sendMessage({ type: 'SV_LIST_ENTRIES' }));
   if (created.entries.length !== 1 || created.entries[0].username !== 'new-user') {
     throw new Error(`new account not saved: ${JSON.stringify(created)}`);
@@ -149,6 +161,10 @@ try {
   await page.waitForTimeout(500);
   const updateBanner = await submitForm(page, 'new-user', 'changed-password');
   const updateTitle = await updateBanner.locator('.sv-banner-title').textContent();
+  const updateKicker = await updateBanner.locator('.sv-banner-kicker').textContent();
+  if (updateKicker !== '更新登录密码' || updateTitle !== 'new-user') {
+    throw new Error(`update banner hierarchy failed: ${updateKicker} / ${updateTitle}`);
+  }
 
   async function bannerMetrics() {
     return page.evaluate(() => {
@@ -226,6 +242,14 @@ try {
   await setBannerPosition('top-right');
   await updateBanner.locator('[data-subvault-save]').click();
   await page.waitForTimeout(500);
+  const updateToast = await page.evaluate(
+    () =>
+      document.getElementById('subvault-ui-root')?.shadowRoot?.querySelector('.sv-toast')
+        ?.textContent || '',
+  );
+  if (!updateToast.includes('new-user') || !updateToast.includes('更新账号')) {
+    throw new Error(`update account toast not detailed: ${updateToast}`);
+  }
   const updated = await options.evaluate(() => chrome.runtime.sendMessage({ type: 'SV_LIST_ENTRIES' }));
   const password = await options.evaluate(async (id) => {
     const result = await chrome.runtime.sendMessage({ type: 'SV_GET_SECRET', id });
@@ -270,8 +294,12 @@ try {
         noPromptOnInputClick: true,
         enterTitle,
         createTitle,
+        createKicker,
+        createToast,
         bannerFrames,
         updateTitle,
+        updateKicker,
+        updateToast,
         spaTitle,
         spanTitle,
         iframeLoginBanner: iframeTitle,

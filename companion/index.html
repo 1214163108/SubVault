@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SubVault Companion</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f4f5fb; --card:#fff; --line:#e2e5f0; --text:#111827; --muted:#64748b; --accent:#4f46e5; --danger:#b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0b1220; --card:#111a2e; --line:#23304a; --text:#e5e7eb; --muted:#94a3b8; --accent:#818cf8; --danger:#fca5a5; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  input[type=file], input[type=password] { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:9px; background:transparent; color:inherit; }
+  button { border:0; border-radius:9px; padding:10px 14px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  .error { color:var(--danger); min-height:20px; margin-top:10px; }
+  .entry { border-top:1px solid var(--line); padding:14px 0; }
+  .entry:first-of-type { border-top:0; }
+  .entry h3 { margin:0 0 6px; font-size:15px; }
+  .kv { display:grid; grid-template-columns:78px minmax(0,1fr); gap:6px 10px; font-size:13px; }
+  .kv span:first-child { color:var(--muted); }
+  .mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; word-break:break-all; }
+  .notice { font-size:12px; color:var(--muted); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SubVault Companion</h1>
+  <p class="sub">本地打开一次性 <code>.svshare</code> 分享包。不联网、不上传、不需要安装扩展。</p>
+
+  <section class="card">
+    <div class="row">
+      <input id="file" type="file" accept=".svshare,application/json" />
+    </div>
+    <div class="row" style="margin-top:12px;">
+      <input id="password" type="password" placeholder="分享密码" autocomplete="off" />
+      <button id="open">解密查看</button>
+      <button id="clear" class="ghost">清除</button>
+    </div>
+    <div id="error" class="error" role="alert"></div>
+    <p class="notice">分享包使用独立密码加密；过期时间由文件内的密文校验。文件可以被转发，无法远程撤销。</p>
+  </section>
+
+  <section id="result" class="card hidden" aria-live="polite">
+    <div class="row" style="justify-content:space-between;">
+      <strong id="summary"></strong>
+      <span class="notice" id="expiry"></span>
+    </div>
+    <div id="entries"></div>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const b64 = (value) => Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+  const textEncoder = new TextEncoder();
+  const textDecoder = new TextDecoder();
+  const AAD_V1 = 'subvault-share-v1';
+  const AAD_V2 = 'subvault-share-v2';
+  let current = null;
+
+  async function bindExpiry(kdf, expiresAt) {
+    const salt = b64(kdf.salt);
+    const tag = textEncoder.encode(`|subvault-share|${expiresAt}`);
+    const input = new Uint8Array(salt.length + tag.length);
+    input.set(salt, 0);
+    input.set(tag, salt.length);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+    return { ...kdf, salt: btoa(String.fromCharCode(...digest)) };
+  }
+
+  function fail(message) { $('error').textContent = message; }
+  function esc(value) {
+    return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[ch]));
+  }
+
+  async function derive(password, kdf) {
+    if (!kdf || !kdf.salt) throw new Error('分享文件缺少加密参数');
+    if (kdf.algo && kdf.algo !== 'PBKDF2-SHA512' && kdf.algo !== 'PBKDF2-SHA256') {
+      throw new Error('该分享包使用了 Companion 不支持的密钥派生算法');
+    }
+    const material = await crypto.subtle.importKey('raw', textEncoder.encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name:'PBKDF2', salt:b64(kdf.salt), iterations:Number(kdf.iterations) || 310000, hash:kdf.hash || 'SHA-512' },
+      material,
+      { name:'AES-GCM', length:256 },
+      false,
+      ['decrypt'],
+    );
+  }
+
+  async function decryptPackage(pkg, password) {
+    const version = Number(pkg?.version);
+    if (!pkg || pkg.format !== 'subvault-share' || (version !== 1 && version !== 2)) {
+      throw new Error('不是有效的 SubVault 分享文件');
+    }
+    const expiresAt = Number(pkg.expiresAt) || 0;
+    if (expiresAt && Date.now() > expiresAt) throw new Error('分享文件已过期，无法解密');
+    if (!pkg.box || typeof pkg.box.iv !== 'string' || typeof pkg.box.data !== 'string') throw new Error('分享文件格式不完整');
+    const kdf = version >= 2 ? await bindExpiry(pkg.kdf, expiresAt) : pkg.kdf;
+    const aad = version >= 2 ? `${AAD_V2}:${expiresAt}` : AAD_V1;
+    const key = await derive(String(password || ''), kdf);
+    let plain;
+    try {
+      plain = await crypto.subtle.decrypt(
+        { name:'AES-GCM', iv:b64(pkg.box.iv), additionalData:textEncoder.encode(aad) },
+        key,
+        b64(pkg.box.data),
+      );
+    } catch {
+      throw new Error('分享密码错误，或文件已损坏');
+    }
+    const payload = JSON.parse(textDecoder.decode(plain));
+    if (
+      Number(payload.version) !== version ||
+      Number(payload.expiresAt) !== expiresAt ||
+      !Array.isArray(payload.entries) ||
+      payload.entries.length === 0
+    ) {
+      throw new Error('分享文件已损坏');
+    }
+    return payload;
+  }
+
+  function render(payload) {
+    current = payload;
+    $('summary').textContent = `${payload.entries.length} 个账号`;
+    $('expiry').textContent = payload.expiresAt ? `有效期至 ${new Date(payload.expiresAt).toLocaleString()}` : '';
+    $('entries').innerHTML = payload.entries.map((entry, index) => `
+      <article class="entry">
+        <h3>${esc(entry.host || entry.url || '未命名站点')}</h3>
+        <div class="kv">
+          <span>用户名</span><span class="mono">${esc(entry.username)}</span>
+          <span>密码</span><span class="mono" data-password="${index}">••••••••</span>
+          <span>网址</span><span class="mono">${esc(entry.url)}</span>
+          ${entry.notes ? `<span>备注</span><span>${esc(entry.notes)}</span>` : ''}
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button class="ghost" data-copy="password" data-index="${index}">复制密码</button>
+          <button class="ghost" data-copy="username" data-index="${index}">复制用户名</button>
+        </div>
+      </article>`).join('');
+    $('result').classList.remove('hidden');
+  }
+
+  async function copy(value) {
+    try { await navigator.clipboard.writeText(String(value)); }
+    catch { window.prompt('复制内容', String(value)); }
+  }
+
+  $('open').addEventListener('click', async () => {
+    fail('');
+    try {
+      if (!current && !$('file').files[0]) throw new Error('请选择 .svshare 文件');
+      let pkg = current;
+      if (!pkg) pkg = JSON.parse(await $('file').files[0].text());
+      const payload = await decryptPackage(pkg, $('password').value);
+      render(payload);
+    } catch (error) {
+      $('result').classList.add('hidden');
+      fail(error?.message || '解密失败');
+    }
+  });
+
+  $('clear').addEventListener('click', () => {
+    current = null;
+    $('file').value = '';
+    $('password').value = '';
+    $('entries').innerHTML = '';
+    $('result').classList.add('hidden');
+    fail('');
+  });
+
+  $('entries').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-copy]');
+    if (!button || !current) return;
+    const entry = current.entries[Number(button.dataset.index)];
+    if (!entry) return;
+    const value = button.dataset.copy === 'password' ? entry.password : entry.username;
+    void copy(value);
+  });
+})();
+</script>
+</body>
+</html>

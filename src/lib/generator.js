@@ -1,9 +1,16 @@
 /** Cryptographically random password generator (no dependencies). */
 
-const CLASSES = {
+const READABLE = {
   lower: 'abcdefghijkmnopqrstuvwxyz',
   upper: 'ABCDEFGHJKLMNPQRSTUVWXYZ',
   digits: '23456789',
+  symbols: '~!@#$%^&*()-_=+[]{};:,.?/|',
+};
+
+const FULL = {
+  lower: 'abcdefghijklmnopqrstuvwxyz',
+  upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  digits: '0123456789',
   symbols: '~!@#$%^&*()-_=+[]{};:,.?/|',
 };
 
@@ -19,16 +26,32 @@ function randomInt(max) {
   return value % max;
 }
 
+function clampLength(value, fallback) {
+  return Math.min(128, Math.max(8, Number(value) || fallback));
+}
+
 /**
- * @param {{length?: number, lower?: boolean, upper?: boolean, digits?: boolean, symbols?: boolean}} [options]
+ * Pure-digit PIN / numeric password.
+ * @param {number} [length]
+ */
+export function generatePin(length = 6) {
+  const size = Math.min(64, Math.max(4, Number(length) || 6));
+  let value = '';
+  for (let index = 0; index < size; index += 1) value += String(randomInt(10));
+  return value;
+}
+
+/**
+ * @param {{length?: number, lower?: boolean, upper?: boolean, digits?: boolean, symbols?: boolean, readable?: boolean}} [options]
  */
 export function generatePassword(options = {}) {
-  const length = Math.min(128, Math.max(8, Number(options.length) || 20));
+  const length = clampLength(options.length, 20);
+  const classes = options.readable === false ? FULL : READABLE;
   const selected = ['lower', 'upper', 'digits', 'symbols'].filter(
     (key) => options[key] !== false,
   );
   const active = selected.length > 0 ? selected : ['lower'];
-  const pools = active.map((key) => CLASSES[key]);
+  const pools = active.map((key) => classes[key]);
   const all = pools.join('');
   const chars = pools.map((pool) => pool[randomInt(pool.length)]);
 

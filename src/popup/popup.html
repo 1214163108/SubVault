@@ -79,13 +79,27 @@
             <div class="strength-bar"><i id="setupStrengthBar"></i></div>
             <span id="setupStrengthText">未输入</span>
           </div>
+          <p class="fineprint" id="setupStrengthHint" hidden></p>
           <label class="field">
             <span>确认主密码</span>
             <input id="setupConfirm" type="password" autocomplete="new-password" placeholder="再次输入主密码" />
           </label>
           <label class="check">
+            <input id="setupKeyFileToggle" type="checkbox" />
+            <span>同时使用密钥文件（可选，双因素解锁）</span>
+          </label>
+          <label class="field" id="setupKeyFileRow" hidden>
+            <span>密钥文件</span>
+            <input id="setupKeyFile" type="file" />
+            <small class="fineprint">任意文件均可；丢失该文件将无法解锁密码库，请与主密码分开备份。</small>
+          </label>
+          <label class="check">
             <input id="setupAck" type="checkbox" />
             <span>我明白：忘记主密码将无法恢复密码库</span>
+          </label>
+          <label class="check" id="setupStrengthAckLabel" hidden>
+            <input id="setupStrengthAck" type="checkbox" />
+            <span>我了解该主密码强度一般，仍要使用</span>
           </label>
           <p class="form-error" id="setupError" hidden></p>
           <button id="setupBtn" class="btn primary block" type="button">创建密码库</button>
@@ -103,6 +117,10 @@
             <h1>解锁密码库</h1>
             <p>输入主密码，填充并保存当前网站的登录信息。</p>
           </div>
+          <label class="field" id="unlockVaultRow" hidden>
+            <span>密码库</span>
+            <select id="unlockVaultSelect"></select>
+          </label>
           <label class="field">
             <span>主密码</span>
             <div class="input-wrap">
@@ -110,6 +128,15 @@
               <button class="reveal" type="button" data-target="unlockPassword">显示</button>
             </div>
           </label>
+          <label class="field" id="unlockKeyFileRow" hidden>
+            <span>密钥文件</span>
+            <input id="unlockKeyFile" type="file" />
+            <small class="fineprint">该密码库启用了密钥文件，必须选择创建时使用的文件。</small>
+          </label>
+          <div id="deviceUnlockRow" class="device-unlock" hidden>
+            <button id="deviceUnlockBtn" class="btn ghost block" type="button">使用本机设备解锁</button>
+            <small id="deviceUnlockHint" class="fineprint">设备绑定仅在本机有效，不保存主密码，也不会同步。</small>
+          </div>
           <p class="form-error" id="unlockError" hidden></p>
           <button id="unlockBtn" class="btn primary block" type="button">解锁</button>
           <p class="fineprint" id="autoLockHint">空闲后会自动锁定。</p>
@@ -132,6 +159,13 @@
           <div class="actions-row">
             <button id="addBtn" class="btn primary" type="button">+ 添加账号</button>
             <button id="manageBtn" class="btn" type="button">管理密码库</button>
+            <button id="genBtn" class="btn gen-btn" type="button" title="生成独立密码" aria-label="生成独立密码">⚡</button>
+          </div>
+
+          <div id="profileBar" class="profile-bar" hidden>
+            <span>身份资料</span>
+            <select id="profileSelect" aria-label="身份资料模板"></select>
+            <button id="profileFillBtn" class="btn small" type="button">填充</button>
           </div>
 
           <div id="syncBanner" class="sync-banner" hidden>
@@ -208,6 +242,58 @@
         <button id="entrySave" class="btn primary" type="button">保存</button>
       </div>
     </dialog>
+
+    <dialog id="totpDialog" class="dialog">
+      <div class="dialog-head">
+        <h3 id="totpTitle">动态码</h3>
+        <button id="totpClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body totp-body">
+        <div id="totpCode" class="totp-code">------</div>
+        <div class="totp-progress" aria-hidden="true"><div id="totpProgressBar"></div></div>
+        <div id="totpMeta" class="muted-text"></div>
+        <div class="button-row">
+          <button id="totpCopyBtn" class="btn primary" type="button">复制动态码</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="genDialog" class="dialog">
+      <div class="dialog-head">
+        <h3>生成密码</h3>
+        <button id="genClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <label class="field">
+          <span>长度 <b id="genLengthValue">20</b></span>
+          <input id="genLength" type="range" min="8" max="64" step="1" value="20" />
+        </label>
+        <div class="gen-options">
+          <label class="check"><input id="genLower" type="checkbox" checked /><span>小写 a-z</span></label>
+          <label class="check"><input id="genUpper" type="checkbox" checked /><span>大写 A-Z</span></label>
+          <label class="check"><input id="genDigits" type="checkbox" checked /><span>数字 2-9</span></label>
+          <label class="check"><input id="genSymbols" type="checkbox" checked /><span>符号 !@#$</span></label>
+          <label class="check"><input id="genReadable" type="checkbox" checked /><span>易读模式</span></label>
+          <label class="check"><input id="genPin" type="checkbox" /><span>PIN（仅数字）</span></label>
+        </div>
+        <div class="gen-output">
+          <code id="genOutput">—</code>
+          <button id="genCopy" class="btn subtle" type="button">复制</button>
+        </div>
+        <p class="fineprint">易读模式排除 1/l/I/0/O。仅在本机生成，不联网、不上传。</p>
+      </div>
+      <div class="dialog-actions">
+        <button id="genRegenerate" class="btn" type="button">重新生成</button>
+        <button id="genUse" class="btn primary" type="button">用于新账号</button>
+      </div>
+    </dialog>
+
+    <div id="privacyShield" class="privacy-shield" hidden>
+      <div class="privacy-shield-card">
+        <strong>内容已隐藏</strong>
+        <span>切换回本页后点击任意位置继续</span>
+      </div>
+    </div>
 
     <script type="module" src="popup.js"></script>
   </body>

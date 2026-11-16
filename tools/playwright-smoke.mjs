@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-const root = path.resolve(import.meta.dirname, '..');
+const root = process.env.SUBVAULT_EXT_ROOT
+  ? path.resolve(process.env.SUBVAULT_EXT_ROOT)
+  : path.resolve(import.meta.dirname, '..');
 const syncDir = path.join(root, '.tmp-host', 'smoke-data');
 fs.rmSync(syncDir, { recursive: true, force: true });
 fs.mkdirSync(syncDir, { recursive: true });
@@ -69,7 +71,7 @@ try {
           port: String(port),
           title: 'Local fixture',
           username: 'dev',
-          password: 'local-password',
+          password: 'SubVault-Test-2026!Qm7#',
           url: `http://127.0.0.1:${port}/`,
         },
       }),
@@ -107,7 +109,7 @@ try {
     username: document.querySelector('input[name="username"]')?.value || '',
     password: document.querySelector('input[name="password"]')?.value || '',
   }));
-  if (values.username !== 'dev' || values.password !== 'local-password') {
+  if (values.username !== 'dev' || values.password !== 'SubVault-Test-2026!Qm7#') {
     throw new Error(`unexpected values: ${JSON.stringify(values)}`);
   }
 

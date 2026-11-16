@@ -1,0 +1,8 @@
+{
+  "extName": {
+    "message": "SubVault Subdomain Password Vault"
+  },
+  "extDesc": {
+    "message": "Share logins by main domain by default, optionally isolate subdomains, import browser CSV exports, and keep everything encrypted on this device."
+  }
+}
