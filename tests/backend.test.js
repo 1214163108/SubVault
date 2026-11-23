@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { base64ToBytes } from '../src/lib/crypto.js';
+import { packContainer, unpackContainer, isContainerBytes } from '../src/lib/container.js';
+import { createKeyFile, keyFileFingerprint } from '../src/lib/keyfile.js';
 
 const local = new Map();
 const session = new Map();
@@ -237,7 +240,11 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
   });
   assert.equal(backup.ok, true);
   assert.equal(backup.independent, true);
-  const backupJson = JSON.parse(backup.backup);
+  assert.equal(backup.encoding, 'svbak');
+  const backupBytes = base64ToBytes(backup.backupBase64);
+  assert.equal(isContainerBytes(backupBytes), true);
+  assert.equal(backupBytes[0], 0x53);
+  const backupJson = await unpackContainer(backupBytes);
   assert.equal(backupJson.format, 'subvault-backup');
   assert.equal(backupJson.version, 4);
   assert.equal(Array.isArray(backupJson.entries), false);
@@ -246,7 +253,7 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
 
   const restored = await send({
     type: 'SV_IMPORT_BACKUP',
-    text: backup.backup,
+    base64: backup.backupBase64,
     password: 'independent-backup-passphrase',
   });
   assert.equal(restored.ok, true);
@@ -254,7 +261,7 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
 
   const replaced = await send({
     type: 'SV_IMPORT_BACKUP',
-    text: backup.backup,
+    base64: backup.backupBase64,
     password: 'independent-backup-passphrase',
     mode: 'replace',
     restoreSettings: true,
@@ -265,10 +272,56 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
 
   const wrongBackup = await send({
     type: 'SV_IMPORT_BACKUP',
-    text: backup.backup,
+    base64: backup.backupBase64,
     password: 'wrong-backup-passphrase',
   });
   assert.equal(wrongBackup.ok, false);
+
+  // --- optional key file: export binds it, import demands exactly that file ---
+  const keyFile = createKeyFile();
+  const withKey = await send({
+    type: 'SV_EXPORT_BACKUP',
+    backupPassword: 'keyfile-backup-passphrase',
+    keyFileBase64: keyFile.base64,
+  });
+  assert.equal(withKey.ok, true);
+  const withKeyJson = await unpackContainer(base64ToBytes(withKey.backupBase64));
+  assert.equal(withKeyJson.keyFile, true);
+  assert.equal(withKeyJson.keyFileFingerprint, await keyFileFingerprint(keyFile.base64));
+
+  const missingKey = await send({
+    type: 'SV_IMPORT_BACKUP',
+    base64: withKey.backupBase64,
+    password: 'keyfile-backup-passphrase',
+  });
+  assert.equal(missingKey.ok, false);
+  assert.match(String(missingKey.error), /密钥文件/);
+
+  const otherKey = createKeyFile();
+  const mismatchedKey = await send({
+    type: 'SV_IMPORT_BACKUP',
+    base64: withKey.backupBase64,
+    password: 'keyfile-backup-passphrase',
+    keyFileBase64: otherKey.base64,
+  });
+  assert.equal(mismatchedKey.ok, false);
+  assert.match(String(mismatchedKey.error), /不匹配/);
+
+  const keyedRestore = await send({
+    type: 'SV_IMPORT_BACKUP',
+    base64: withKey.backupBase64,
+    password: 'keyfile-backup-passphrase',
+    keyFileBase64: keyFile.base64,
+  });
+  assert.equal(keyedRestore.ok, true);
+  assert.equal(keyedRestore.independent, true);
+
+  const keyWithoutPassword = await send({
+    type: 'SV_EXPORT_BACKUP',
+    keyFileBase64: keyFile.base64,
+  });
+  assert.equal(keyWithoutPassword.ok, false);
+  assert.match(String(keyWithoutPassword.error), /独立备份密码/);
 
   const csvWithoutPassword = await send({ type: 'SV_EXPORT_CSV' });
   assert.equal(csvWithoutPassword.ok, false);
@@ -348,12 +401,68 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
     tab('http://localhost:3000/'),
   );
   assert.equal(samePort.matches.length, 1);
+
+  // Port isolation now covers DNS names and bare IPs too.
+  const dnsCreated = await send({
+    type: 'SV_ADD_ENTRY',
+    entry: {
+      host: 'app.example.com',
+      port: '8080',
+      title: 'Port scoped',
+      username: 'dns-port',
+      password: 'SubVault-Test-2026!Qm7#',
+    },
+  });
+  assert.equal(dnsCreated.ok, true);
+  const dnsSamePort = await send(
+    { type: 'SV_GET_MATCHES' },
+    tab('https://app.example.com:8080/'),
+  );
+  assert.ok(dnsSamePort.matches.some((item) => item.username === 'dns-port'));
+  const dnsOtherPort = await send(
+    { type: 'SV_GET_MATCHES' },
+    tab('https://app.example.com:9090/'),
+  );
+  assert.ok(!dnsOtherPort.matches.some((item) => item.username === 'dns-port'));
+  const dnsNoPort = await send(
+    { type: 'SV_GET_MATCHES' },
+    tab('https://app.example.com/'),
+  );
+  assert.ok(!dnsNoPort.matches.some((item) => item.username === 'dns-port'));
+
+  const ipCreated = await send({
+    type: 'SV_ADD_ENTRY',
+    entry: {
+      host: '192.168.1.10',
+      port: '5000',
+      title: 'IP scoped',
+      username: 'ip-port',
+      password: 'SubVault-Test-2026!Qm7#',
+    },
+  });
+  assert.equal(ipCreated.ok, true);
+  const ipOtherPort = await send(
+    { type: 'SV_GET_MATCHES' },
+    tab('http://192.168.1.10:5001/'),
+  );
+  assert.ok(!ipOtherPort.matches.some((item) => item.username === 'ip-port'));
+  const ipSamePort = await send(
+    { type: 'SV_GET_MATCHES' },
+    tab('http://192.168.1.10:5000/'),
+  );
+  assert.ok(ipSamePort.matches.some((item) => item.username === 'ip-port'));
+
   await send({ type: 'SV_SET_SETTINGS', settings: { portIsolation: false } });
   const sharedPort = await send(
     { type: 'SV_GET_MATCHES' },
     tab('http://localhost:3001/'),
   );
   assert.equal(sharedPort.matches.length, 1);
+  const sharedDnsPort = await send(
+    { type: 'SV_GET_MATCHES' },
+    tab('https://app.example.com:9090/'),
+  );
+  assert.ok(sharedDnsPort.matches.some((item) => item.username === 'dns-port'));
 
   await send({ type: 'SV_LOCK' });
   const locked = await send({ type: 'SV_GET_MATCHES' }, tab('https://mail.example.com/'));
@@ -456,22 +565,22 @@ test('backend integration: setup, domain policy, timestamp merge, lock', async (
     backupExpiresAt: expiresAt,
   });
   assert.equal(expiredBackup.ok, true);
-  const expiredJson = JSON.parse(expiredBackup.backup);
+  const expiredJson = await unpackContainer(base64ToBytes(expiredBackup.backupBase64));
   assert.equal(expiredJson.version, 5);
   assert.equal(expiredJson.expiresAt, expiresAt);
 
-  const tampered = JSON.parse(expiredBackup.backup);
+  const tampered = await unpackContainer(base64ToBytes(expiredBackup.backupBase64));
   tampered.expiresAt += 1000;
   const tamperedImport = await send({
     type: 'SV_IMPORT_BACKUP',
-    text: JSON.stringify(tampered),
+    base64: Buffer.from(await packContainer(tampered)).toString('base64'),
     password: 'Backup-Expiry-Test-2026!Qm7',
   });
   assert.equal(tamperedImport.ok, false);
 
   const goodImport = await send({
     type: 'SV_IMPORT_BACKUP',
-    text: expiredBackup.backup,
+    base64: expiredBackup.backupBase64,
     password: 'Backup-Expiry-Test-2026!Qm7',
   });
   assert.equal(goodImport.ok, true);

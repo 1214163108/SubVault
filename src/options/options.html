@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="options.css" />
     <script src="../vendor/kdbxweb-shim.js"></script>
     <script src="../vendor/kdbxweb.min.js"></script>
+    <script src="../vendor/jsqr.min.js"></script>
   </head>
   <body class="booting">
     <div id="shell" class="shell">
@@ -23,37 +24,49 @@
           <input id="settingsSearch" type="search" placeholder="搜索设置…" autocomplete="off" spellcheck="false" aria-label="搜索设置" />
         </div>
 
-        <nav class="nav">
-          <button class="nav-item active" type="button" data-section="vault">
-            <span class="nav-dot"></span>密码库
-          </button>
-          <button class="nav-item" type="button" data-section="general">
-            <span class="nav-dot"></span>通用
-          </button>
-          <button class="nav-item" type="button" data-section="security">
-            <span class="nav-dot"></span>安全
-          </button>
-          <button class="nav-item" type="button" data-section="takeover">
-            <span class="nav-dot"></span>浏览器接管
-          </button>
-          <button class="nav-item" type="button" data-section="domains">
-            <span class="nav-dot"></span>域名与站点
-          </button>
-          <button class="nav-item" type="button" data-section="sync">
-            <span class="nav-dot"></span>同步与备份
-          </button>
-          <button class="nav-item" type="button" data-section="transfer">
-            <span class="nav-dot"></span>导入与导出
-          </button>
-          <button class="nav-item" type="button" data-section="share">
-            <span class="nav-dot"></span>分享与旅行
-          </button>
-          <button class="nav-item" type="button" data-section="language">
-            <span class="nav-dot"></span>语言与格式
-          </button>
-          <button class="nav-item" type="button" data-section="about">
-            <span class="nav-dot"></span>关于
-          </button>
+        <nav class="nav" aria-label="设置分组">
+          <div class="nav-group">
+            <div class="nav-group-label">密码库</div>
+            <button class="nav-item active" type="button" data-section="vault">
+              <span class="nav-dot"></span>全部账号
+            </button>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-label">日常使用</div>
+            <button class="nav-item" type="button" data-section="general">
+              <span class="nav-dot"></span>通用
+            </button>
+            <button class="nav-item" type="button" data-section="security">
+              <span class="nav-dot"></span>安全
+            </button>
+            <button class="nav-item" type="button" data-section="takeover">
+              <span class="nav-dot"></span>浏览器接管
+            </button>
+            <button class="nav-item" type="button" data-section="domains">
+              <span class="nav-dot"></span>域名与站点
+            </button>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-label">数据</div>
+            <button class="nav-item" type="button" data-section="sync">
+              <span class="nav-dot"></span>同步与备份
+            </button>
+            <button class="nav-item" type="button" data-section="transfer">
+              <span class="nav-dot"></span>导入与导出
+            </button>
+            <button class="nav-item" type="button" data-section="share">
+              <span class="nav-dot"></span>分享与旅行
+            </button>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-label">其他</div>
+            <button class="nav-item" type="button" data-section="language">
+              <span class="nav-dot"></span>语言与格式
+            </button>
+            <button class="nav-item" type="button" data-section="about">
+              <span class="nav-dot"></span>关于
+            </button>
+          </div>
         </nav>
 
         <div class="sidebar-foot">
@@ -88,12 +101,41 @@
 
         <section id="section-vault" class="section">
           <div class="stats-grid">
-            <div class="stat"><strong id="statTotal">0</strong><span>账号总数</span></div>
-            <div class="stat"><strong id="statHosts">0</strong><span>站点</span></div>
-            <div class="stat warn"><strong id="statWeak">0</strong><span>弱密码</span></div>
-            <div class="stat warn"><strong id="statReused">0</strong><span>重复使用</span></div>
-            <div class="stat warn"><strong id="statOld">0</strong><span>超过 1 年</span></div>
-            <div class="stat warn"><strong id="statHttp">0</strong><span>HTTP 明文</span></div>
+            <button class="stat" type="button" data-stat-filter="all" title="显示全部账号">
+              <strong id="statTotal">0</strong><span>账号总数</span>
+            </button>
+            <button class="stat" type="button" data-stat-filter="hosts" title="按站点浏览">
+              <strong id="statHosts">0</strong><span>站点</span>
+            </button>
+            <button class="stat warn" type="button" data-stat-filter="weak" title="只看弱密码">
+              <strong id="statWeak">0</strong><span>弱密码</span>
+            </button>
+            <button class="stat warn" type="button" data-stat-filter="reused" title="只看重复使用的密码">
+              <strong id="statReused">0</strong><span>重复使用</span>
+            </button>
+            <button class="stat warn" type="button" data-stat-filter="old" title="只看超过 1 年未改的密码">
+              <strong id="statOld">0</strong><span id="statOldLabel">超过 1 年</span>
+            </button>
+            <button class="stat warn" type="button" data-stat-filter="http" title="只看 HTTP 明文站点">
+              <strong id="statHttp">0</strong><span>HTTP 明文</span>
+            </button>
+          </div>
+
+          <div class="vault-insights">
+            <div class="insight-card health-card">
+              <button class="health-ring" id="healthRing" type="button" style="--score:0" title="查看需要处理的账号">
+                <strong id="healthScore">—</strong>
+                <span>健康度</span>
+              </button>
+              <div class="insight-copy">
+                <strong>密码健康</strong>
+                <small id="healthHint">弱密码、重复与过期密码越少，分数越高。</small>
+              </div>
+            </div>
+            <div class="insight-card host-chart-card">
+              <div class="insight-head"><strong>站点分布</strong><small>账号最多的站点</small></div>
+              <div id="hostChart" class="host-chart"></div>
+            </div>
           </div>
 
           <div class="toolbar">
@@ -109,9 +151,16 @@
               <option value="recent">最近使用</option>
               <option value="weak">弱密码</option>
               <option value="reused">重复使用</option>
-              <option value="old">超过 1 年</option>
+              <option value="old" id="filterOldOption">超过 1 年</option>
               <option value="http">HTTP 明文</option>
               <option value="totp">含动态码</option>
+              <option value="issues">需要处理</option>
+            </select>
+            <select id="hostFilter" aria-label="按站点筛选">
+              <option value="">全部站点</option>
+            </select>
+            <select id="tagFilter" aria-label="按标签筛选">
+              <option value="">全部标签</option>
             </select>
             <select id="sortSelect" aria-label="排序">
               <option value="host">按网站</option>
@@ -120,6 +169,9 @@
               <option value="changed">记录时间</option>
             </select>
             <button id="findDuplicatesBtn" class="btn" type="button">检查重复</button>
+            <button id="openTrashBtn" class="btn trash-trigger" type="button">
+              回收站<span id="trashCount" class="trash-count" hidden>0</span>
+            </button>
           </div>
 
           <div id="duplicatesPanel" class="result" hidden></div>
@@ -212,6 +264,10 @@
                 <button id="exportBackupGenerate" class="btn ghost" type="button" aria-label="生成强随机密码">生成</button>
               </div>
             </label>
+            <label class="check backup-check">
+              <input id="exportBackupKeyFile" type="checkbox" />
+              <span>同时生成密钥文件（.svkey），导入时必须一并提供</span>
+            </label>
             <label class="field">
               <span>备份有效期</span>
               <select id="exportBackupExpiry">
@@ -228,15 +284,19 @@
             <div class="notice">
               备份会包含账号、设置、子域规则和站点忽略列表，但不包含主密码或派生密钥。独立密码会用新的随机盐重新加密，不会保存在扩展里。
             </div>
+            <div class="notice">
+              勾选密钥文件后，会额外下载一个 40 字节的 .svkey 文件。它不包含密码，但会和备份密码一起参与密钥派生：缺少它或换成别的密钥文件都无法解密，请与备份文件分开存放。
+            </div>
             <div class="button-row">
               <button id="exportBackupBtn" class="btn primary" type="button">导出加密备份</button>
               <button id="chooseBackupBtn" class="btn" type="button">选择备份文件</button>
-              <input id="backupFile" type="file" accept=".json,application/json" hidden />
+              <input id="backupFile" type="file" accept=".svbak,.json,application/octet-stream,application/json" hidden />
             </div>
             <div id="backupFileName" class="file-name" hidden></div>
             <div id="backupHealth" class="status-box">最近备份：尚未记录</div>
             <div class="button-row">
               <button id="recoveryKitBtn" class="btn" type="button">下载恢复说明</button>
+              <button id="recoveryKitViewBtn" class="btn" type="button">查看恢复说明</button>
               <button id="verifyBackupBtn" class="btn" type="button">校验所选备份结构</button>
             </div>
             <div class="form-grid two backup-options">
@@ -252,6 +312,10 @@
                 <span>同时恢复设置、子域规则和站点例外</span>
               </label>
             </div>
+            <label class="field" id="backupKeyFileRow" hidden>
+              <span>密钥文件（该备份已绑定 .svkey）</span>
+              <input id="backupKeyFile" type="file" accept=".svkey,application/octet-stream" />
+            </label>
             <div class="inline-form">
               <input id="backupPassword" type="password" placeholder="备份文件密码（独立密码或主密码）" autocomplete="off" />
               <button id="importBackupBtn" class="btn" type="button">恢复备份</button>
@@ -290,8 +354,8 @@
             </div>
             <label class="switch-row">
               <span>
-                <strong>localhost / IP 按端口隔离</strong>
-                <small>开启后 localhost:3000 和 localhost:4000 各自独立；普通域名仍忽略端口。</small>
+                <strong>按端口隔离</strong>
+                <small>开启后端口参与匹配：localhost:3000 与 localhost:4000 各自独立，example.com:8080 与 example.com:9090 也各自独立；不带端口的地址仍按主机名匹配。</small>
               </span>
               <input id="portIsolationToggle" type="checkbox" data-setting="portIsolation" />
               <span class="switch"></span>
@@ -497,6 +561,44 @@
               </div>
             </div>
             <div class="webdav-section">
+              <div class="webdav-actions">
+                <div>
+                  <h3>自动备份与历史副本</h3>
+                  <div id="webdavAutoMeta" class="hint"></div>
+                </div>
+                <label class="switch-row">
+                  <span>
+                    <strong>定时自动备份</strong>
+                    <small>解锁状态下按间隔自动上传加密备份。</small>
+                  </span>
+                  <input id="webdavAutoBackup" type="checkbox" data-setting="webdavAutoBackup" />
+                  <span class="switch"></span>
+                </label>
+              </div>
+              <div class="form-grid three">
+                <label class="field">
+                  <span>备份间隔（小时）</span>
+                  <input id="webdavAutoBackupHours" type="number" min="1" max="168" step="1" value="24" />
+                </label>
+                <label class="field">
+                  <span>保留最近份数</span>
+                  <input id="webdavKeepCopies" type="number" min="0" max="200" step="1" value="10" />
+                </label>
+                <label class="field">
+                  <span>删除超过（天）</span>
+                  <input id="webdavArchiveDays" type="number" min="0" max="3650" step="1" value="0" />
+                </label>
+              </div>
+              <div class="webdav-actions">
+                <span class="hint">每次备份会额外上传一份带时间的副本；0 表示不按该条件清理。</span>
+                <div class="button-row">
+                  <button id="webdavHistoryBtn" class="btn ghost" type="button">查看历史副本</button>
+                  <button id="webdavPruneBtn" class="btn ghost" type="button">按规则清理</button>
+                </div>
+              </div>
+              <div id="webdavHistoryList" class="archive-list" hidden></div>
+            </div>
+            <div class="webdav-section">
               <h3>恢复</h3>
               <div class="form-grid two">
                 <label class="field span-2">
@@ -618,6 +720,34 @@
             </label>
             <p class="muted-text auto-lock-note">自动锁定按“最后一次 SubVault 操作”计时；系统锁屏/系统空闲锁定是独立开关，不受这里的分钟数影响。</p>
 
+            <label class="select-row">
+              <span>
+                <strong>密码到期提醒</strong>
+                <small>超过该天数未修改的密码会计入“需要处理”，并在列表里标出；设为 0 关闭提醒。</small>
+              </span>
+              <select id="passwordMaxAgeSelect">
+                <option value="0">关闭提醒</option>
+                <option value="90">90 天</option>
+                <option value="180">180 天</option>
+                <option value="365">1 年</option>
+                <option value="730">2 年</option>
+              </select>
+            </label>
+
+            <label class="select-row">
+              <span>
+                <strong>回收站保留时间</strong>
+                <small>删除的账号在该天数后自动从回收站清除；设为 0 表示永久保留（仍受 100 条上限约束）。</small>
+              </span>
+              <select id="trashRetentionSelect">
+                <option value="0">永久保留</option>
+                <option value="7">7 天</option>
+                <option value="30">30 天</option>
+                <option value="90">90 天</option>
+                <option value="365">365 天</option>
+              </select>
+            </label>
+
             <label class="check">
               <input id="allowSequenceSubmit" type="checkbox" data-setting="allowSequenceSubmit" />
               <span>允许填充序列执行“按 Enter”提交（默认关闭，避免误登录）</span>
@@ -684,6 +814,20 @@
 
             <label class="select-row">
               <span>
+                <strong>网页动态码提示时长</strong>
+                <small>检测到当前网站有动态码时，在网页右上角显示验证码与复制按钮；到时间后自动收起。</small>
+              </span>
+              <select id="otpToastSecondsSelect">
+                <option value="3">3 秒</option>
+                <option value="5">5 秒</option>
+                <option value="8">8 秒</option>
+                <option value="10">10 秒</option>
+                <option value="15">15 秒</option>
+              </select>
+            </label>
+
+            <label class="select-row">
+              <span>
                 <strong>主题外观</strong>
                 <small>跟随系统 / 浅色 / 深色；同时影响扩展页面、popup 和网页内的填充提示。</small>
               </span>
@@ -703,6 +847,45 @@
                 <option value="solid">经典纯色</option>
                 <option value="glass">磨砂玻璃</option>
                 <option value="liquid">液态玻璃</option>
+              </select>
+            </label>
+
+            <div class="appearance-row">
+              <span class="appearance-copy">
+                <strong>强调色</strong>
+                <small>用于按钮、选中项、输入焦点与页面内填充提示。</small>
+              </span>
+              <div class="accent-picker" id="accentPicker" role="radiogroup" aria-label="强调色">
+                <button class="accent-swatch" type="button" role="radio" data-accent-value="indigo" style="--swatch:#4f46e5" title="靛蓝" aria-label="靛蓝"></button>
+                <button class="accent-swatch" type="button" role="radio" data-accent-value="ocean" style="--swatch:#0284c7" title="海蓝" aria-label="海蓝"></button>
+                <button class="accent-swatch" type="button" role="radio" data-accent-value="emerald" style="--swatch:#059669" title="翡翠" aria-label="翡翠"></button>
+                <button class="accent-swatch" type="button" role="radio" data-accent-value="rose" style="--swatch:#e11d48" title="玫瑰" aria-label="玫瑰"></button>
+                <button class="accent-swatch" type="button" role="radio" data-accent-value="amber" style="--swatch:#d97706" title="琥珀" aria-label="琥珀"></button>
+                <button class="accent-swatch" type="button" role="radio" data-accent-value="violet" style="--swatch:#7c3aed" title="紫罗兰" aria-label="紫罗兰"></button>
+              </div>
+            </div>
+
+            <label class="select-row">
+              <span>
+                <strong>玻璃强度</strong>
+                <small>柔和 / 强 / 极强；仅对磨砂玻璃和液态玻璃生效，强度越高透光与模糊越明显。</small>
+              </span>
+              <select id="glassStrengthSelect">
+                <option value="soft">柔和</option>
+                <option value="strong">强（推荐）</option>
+                <option value="ultra">极强</option>
+              </select>
+            </label>
+
+            <label class="select-row">
+              <span>
+                <strong>界面圆角</strong>
+                <small>柔和 / 圆润 / 方正；影响卡片、弹窗、输入框与按钮。</small>
+              </span>
+              <select id="uiRadiusSelect">
+                <option value="soft">柔和</option>
+                <option value="round">圆润</option>
+                <option value="square">方正</option>
               </select>
             </label>
 
@@ -843,6 +1026,32 @@
             <button id="changePasswordBtn" class="btn primary" type="button">修改主密码</button>
           </div>
 
+            <div class="generator-card" id="generatorCard">
+              <div class="generator-head">
+                <div class="appearance-copy">
+                  <strong>默认密码生成器</strong>
+                  <small>用于新账号、修改密码和所有“生成强随机密码”按钮；长度 8–128，可组合大小写、数字、符号与易读模式。</small>
+                </div>
+                <button id="generatorPreviewBtn" class="btn" type="button">生成预览</button>
+              </div>
+              <div class="gen-config-grid">
+                <label class="field">
+                  <span>长度</span>
+                  <input id="genLengthInput" type="number" min="8" max="128" step="1" value="20" />
+                </label>
+                <label class="check"><input id="genUpper" type="checkbox" checked /><span>大写 A–Z</span></label>
+                <label class="check"><input id="genLower" type="checkbox" checked /><span>小写 a–z</span></label>
+                <label class="check"><input id="genDigits" type="checkbox" checked /><span>数字 0–9</span></label>
+                <label class="check"><input id="genSymbols" type="checkbox" checked /><span>符号 !@#$</span></label>
+                <label class="check"><input id="genReadable" type="checkbox" checked /><span>易读（排除 1/l/I/0/O）</span></label>
+              </div>
+              <div class="gen-preview-row">
+                <code id="genPreview"><span>点击“生成预览”</span></code>
+                <button id="genCopyBtn" class="btn subtle" type="button">复制</button>
+              </div>
+            </div>
+
+
           <div class="card danger-card">
             <div class="card-head">
               <div>
@@ -926,6 +1135,10 @@
                 <button id="shareGenerate" class="btn ghost" type="button" aria-label="生成强随机密码">生成</button>
               </div>
             </label>
+            <label class="check backup-check">
+              <input id="shareExportKeyFile" type="checkbox" />
+              <span>同时生成密钥文件（.svkey），导入时必须一并提供</span>
+            </label>
             <label class="select-row">
               <span>
                 <strong>有效期</strong>
@@ -955,11 +1168,15 @@
             <div class="divider"></div>
             <label class="field">
               <span>导入分享文件</span>
-              <input id="shareFile" type="file" accept=".svshare,application/json" />
+              <input id="shareFile" type="file" accept=".svshare,application/octet-stream" />
             </label>
             <label class="field">
               <span>分享密码</span>
               <input id="shareImportPassword" type="password" autocomplete="off" />
+            </label>
+            <label class="field" id="shareImportKeyFileRow" hidden>
+              <span>密钥文件（该分享已绑定 .svkey）</span>
+              <input id="shareImportKeyFile" type="file" accept=".svkey,application/octet-stream" />
             </label>
             <div class="button-row">
               <button id="shareImportBtn" class="btn" type="button">解密并预览</button>
@@ -1125,6 +1342,35 @@
           <button id="gateImportBack" class="link-btn" type="button">返回</button>
         </form>
 
+        <form id="gateWebdavForm" class="gate-form" hidden>
+          <p class="gate-import-note">
+            填写 WebDAV 地址与该备份的主密码，直接从远端恢复；恢复会覆盖本机密码库并自动解锁。
+          </p>
+          <label class="field">
+            <span>WebDAV 地址</span>
+            <input id="gateWebdavUrl" type="url" placeholder="https://dav.example.com/remote.php/dav/files/user" autocomplete="off" spellcheck="false" />
+          </label>
+          <div class="form-grid two">
+            <label class="field">
+              <span>用户名</span>
+              <input id="gateWebdavUsername" type="text" autocomplete="username" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <input id="gateWebdavPassword" type="password" autocomplete="new-password" />
+            </label>
+          </div>
+          <div class="input-wrap">
+            <input id="gateWebdavMaster" type="password" autocomplete="current-password" placeholder="备份的主密码" />
+          </div>
+          <label class="field">
+            <span>密钥文件（若该备份启用）</span>
+            <input id="gateWebdavKeyFile" type="file" />
+          </label>
+          <button id="gateWebdavBtn" class="btn primary block" type="button">从 WebDAV 恢复并解锁</button>
+          <button id="gateWebdavBack" class="link-btn" type="button">返回</button>
+        </form>
+
         <form id="gateUnlockForm" class="gate-form">
           <label class="field" id="gateVaultRow" hidden>
             <span>密码库</span>
@@ -1175,12 +1421,22 @@
           <button id="gateSetupBtn" class="btn primary block" type="submit">创建本地密码库</button>
         </form>
 
+        <button id="gateWebdavOpen" class="link-btn" type="button" hidden>已有 WebDAV 备份？从远端恢复</button>
+
         <p id="gateError" class="form-error" hidden></p>
         <p class="gate-foot">主密码只在本机使用 · 不上传、不联网</p>
       </div>
     </div>
 
     <div id="toast" class="toast" hidden></div>
+    <div id="undoToast" class="undo-toast" hidden role="status" aria-live="polite">
+      <div class="undo-toast-copy">
+        <strong id="undoToastTitle">已删除账号</strong>
+        <small id="undoToastDetail">可在倒计时结束前撤销。</small>
+      </div>
+      <button id="undoToastBtn" class="btn subtle" type="button">撤销删除</button>
+      <div class="undo-toast-track"><span id="undoToastBar"></span></div>
+    </div>
 
     <dialog id="entryDialog" class="dialog">
       <div class="dialog-head">
@@ -1254,9 +1510,23 @@
           <input id="entryFavorite" type="checkbox" />
           <span>收藏此账号（列表中优先显示）</span>
         </label>
+        <div class="form-grid two">
+          <label class="field">
+            <span>动态码类型</span>
+            <select id="entryTotpType">
+              <option value="totp">TOTP（按时间刷新）</option>
+              <option value="hotp">HOTP（按次数递增）</option>
+              <option value="steam">Steam Guard（5 位字母数字）</option>
+            </select>
+          </label>
+          <label class="field" id="entryTotpCounterRow" hidden>
+            <span>HOTP 计数器</span>
+            <input id="entryTotpCounter" type="number" min="0" step="1" value="0" />
+          </label>
+        </div>
         <label class="field">
           <span>TOTP 密钥、otpauth 链接或二维码</span>
-          <input id="entryTotp" type="text" autocomplete="off" placeholder="Base32 或 otpauth://totp/..." />
+          <input id="entryTotp" type="text" autocomplete="off" placeholder="Base32、otpauth://totp/...、otpauth://hotp/... 或 steam://..." />
         </label>
         <div class="form-grid two">
           <label class="field">
@@ -1344,14 +1614,15 @@
         <h3 id="totpTitle">动态码</h3>
         <button id="totpClose" class="icon-btn" type="button" aria-label="关闭">×</button>
       </div>
-      <div class="dialog-body totp-body">
-        <div id="totpCode" class="totp-code">------</div>
-        <div class="totp-progress" aria-hidden="true"><div id="totpProgressBar"></div></div>
-        <div id="totpMeta" class="muted-text"></div>
-        <div class="button-row">
-          <button id="totpCopyBtn" class="btn primary" type="button">复制动态码</button>
+        <div class="dialog-body totp-body">
+          <div id="totpCode" class="totp-code">------</div>
+          <div class="totp-progress" id="totpProgress" aria-hidden="true"><div id="totpProgressBar"></div></div>
+          <div id="totpMeta" class="muted-text"></div>
+          <div class="button-row">
+            <button id="totpCopyBtn" class="btn primary" type="button">复制动态码</button>
+            <button id="totpNextBtn" class="btn subtle" type="button" hidden>生成下一个（计数器 +1）</button>
+          </div>
         </div>
-      </div>
     </dialog>
 
     <dialog id="historyDialog" class="dialog small">
@@ -1362,6 +1633,42 @@
       <div class="dialog-body">
         <p class="danger-message">历史密码仍是敏感信息；确认不需要后再关闭。</p>
         <div id="historyList" class="history-list"></div>
+      </div>
+    </dialog>
+
+    <dialog id="recoveryKitDialog" class="dialog">
+      <div class="dialog-head">
+        <h3>恢复说明</h3>
+        <button id="recoveryKitClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <p class="fineprint">下载的恢复说明是 SubVault 私有格式（.svbak），无法用文本编辑器直接打开；请在这里查看或复制。</p>
+        <pre id="recoveryKitText" class="recovery-kit-text"></pre>
+      </div>
+      <div class="dialog-actions">
+        <button id="recoveryKitCopy" class="btn" type="button">复制内容</button>
+        <button id="recoveryKitDownload" class="btn primary" type="button">下载 .svbak</button>
+      </div>
+    </dialog>
+
+    <dialog id="trashDialog" class="dialog trash-dialog">
+      <div class="dialog-head">
+        <h3>回收站</h3>
+        <button id="trashClose" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="trash-head">
+          <div>
+            <small id="trashHint">删除的账号会保留在这里，可随时恢复。</small>
+          </div>
+          <button id="emptyTrashBtn" class="btn danger subtle" type="button">清空回收站</button>
+        </div>
+        <div id="trashList" class="trash-list"></div>
+        <div id="trashEmpty" class="empty" hidden>
+          <div class="empty-icon">♻</div>
+          <h3>回收站是空的</h3>
+          <p>删除账号后会先进入这里，不会立即永久消失。</p>
+        </div>
       </div>
     </dialog>
 

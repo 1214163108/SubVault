@@ -52,7 +52,16 @@ files in the report.
 - The Native Messaging host stores encrypted vault blobs per vault
   (`state.json` / `vault-<id>.json`) plus DPAPI-protected device bindings
   (`device.json` / `device-<id>.json`). It cannot decrypt the master password
-  and does not open a listening port. Optional WebDAV is an independent
+  and does not open a listening port.
+- That data lives in a fixed per-user folder (`%LOCALAPPDATA%\SubVaultSync` on
+  Windows, `~/Library/Application Support/SubVaultSync` or
+  `${XDG_CONFIG_HOME:-~/.config}/SubVaultSync` elsewhere), never beside the host
+  binary. Reinstalling or relocating the host therefore cannot make a device
+  see an empty remote and overwrite the real vault with its own copy. If an
+  older build left files in `<host dir>/data`, they are copied into the fixed
+  folder on first start; existing files are never overwritten. The only
+  fallback to the host folder happens when the per-user folder is not
+  writable. Optional WebDAV is an independent
   encrypted backup/restore target, not a real-time sync transport; the host
   performs GET/PUT/MKCOL to the user-configured server, credentials are passed
   per command, and they are not written to host storage.
@@ -63,6 +72,23 @@ files in the report.
 - Encrypted backups can carry an optional expiry that is bound into the KDF and
   AAD (format v5). Such backups require an independent backup password, and an
   expired file cannot be decrypted with the original password.
+- Private exports (encrypted backup, sync snapshot, pre-import/pre-merge/
+  pre-restore snapshots and the recovery note) are written as `.svbak`, a
+  binary container with an `SVBAK` magic header, a version byte, a gzip flag
+  and a gzip-compressed JSON payload. Renaming the file to `.txt` does not
+  reveal or allow editing the payload; the extension still accepts a renamed
+  container on import, but rejects arbitrary files with a format error. The
+  recovery note is viewable inside the options page, so no external tool is
+  needed. Interoperable formats (plaintext CSV, KeePass `.kdbx`, `.svshare`)
+  are intentionally unchanged.
+- Encrypted backups and share packages can optionally be bound to an exported
+  key file (`.svkey`: `SVKEY` magic, version byte, 32 random bytes). The key file
+  never contains a password; its SHA-256 is folded into the KDF input next to the
+  password, so the export cannot be decrypted without that exact file. The
+  export header records a 16-hex fingerprint of the key file, and the importer
+  rejects a missing or mismatched file before running the expensive KDF. The key
+  file is optional: without it the export is password-only, exactly as before.
+  The file is never stored in the vault, so losing it means losing the export.
 - Passkey support stores only credential id, RP id, account and note as vault
   metadata; the extension cannot import or use a platform Passkey private key.
 - TOTP secrets are stored in the encrypted vault and codes are generated
@@ -80,3 +106,11 @@ files in the report.
 - Verify release SHA-256 checksums before installing a downloaded package.
 - Remove exported plaintext CSV files after use.
 - Native sync requires the same master password on both browser profiles.
+
+## 回收站、动态码提示与存储
+
+- 删除的条目先进入加密密码库内的 `trash` 数组（上限 100 条），可在设置页恢复或清空；不会写入明文日志或外部存储。
+- 网页动态码卡片只在当前 http/https 页面内显示，验证码由本地 TOTP 计算后经扩展消息传给内容脚本，不发起网络请求；复制仍受 30 秒剪贴板清理策略约束。
+- 存储预算显示为 50 MB，并申请 `unlimitedStorage` 以避免浏览器配额过早触顶；实际占用仍由用户本机磁盘决定。
+- WebDAV 首次备份会在配置的目录内自动 `MKCOL` 创建固定子目录；每次备份成功后除覆盖 `state.json` 外，还会在同一目录写入一份带时间戳的副本 `subvault-YYYYMMDD-HHmmss.json`（`If-None-Match: *`，不覆盖既有副本）。副本内容与主备份完全相同的密文，不含明文或密钥。
+- 宿主不监听端口，扩展仍保持 `connect-src 'none'`。

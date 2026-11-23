@@ -26,7 +26,12 @@ const send = (type, payload = {}) =>
 const password = 'SubVault-Test-2026!Qm7#';
 await send('SV_SETUP', { password });
 await send('SV_SET_SETTINGS', {
-  settings: { lockOnSystemLock: false, lockOnSystemIdle: false, autoLockMinutes: 0 },
+  settings: {
+    lockOnSystemLock: false,
+    lockOnSystemIdle: false,
+    autoLockMinutes: 0,
+    privacyShieldOnBlur: false,
+  },
 });
 await page.reload();
 await page.click('[data-section="transfer"]');
@@ -122,7 +127,9 @@ await page.waitForTimeout(400);
 result.totpFilterText = (await page.textContent('#vaultList')) || '';
 result.totpFilterCount = await page.locator('#vaultList .entry-card').count();
 
-// Privacy shield covers the UI on blur and dismisses on click.
+// Privacy shield covers the UI on blur and dismisses on click. The shield is
+// off during setup so it cannot block the import clicks above; turn it on here.
+await send('SV_SET_SETTINGS', { settings: { privacyShieldOnBlur: true } });
 await page.evaluate(() => window.dispatchEvent(new Event('blur')));
 await page.waitForSelector('#privacyShield:not([hidden])', { timeout: 3000 });
 result.shieldVisible = true;
@@ -132,11 +139,7 @@ result.shieldHidden = await page.locator('#privacyShield').isHidden();
 // Copy toast mentions the auto-clear window.
 await page.selectOption('#filterSelect', 'all');
 await page.waitForTimeout(300);
-const copyButton = page
-  .locator('#vaultList .entry-card')
-  .first()
-  .locator('.entry-actions button')
-  .filter({ hasText: /^复制$|^Copy$/ });
+const copyButton = page.locator('#vaultList .entry-card').first().locator('.entry-actions button.primary-mini');
 await copyButton.click();
 await page.waitForSelector('#toast:not([hidden])', { timeout: 5000 });
 result.copyToast = (await page.textContent('#toast')) || '';

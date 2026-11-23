@@ -31,6 +31,9 @@ for dir in "${TARGETS[@]}"; do
 done
 if [ "$REMOVE_DATA" = "1" ]; then
   rm -rf "$INSTALL_DIR"
+  # The vault lives in a stable per-user folder, not next to the binary.
+  rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/SubVaultSync"
+  rm -rf "$HOME/Library/Application Support/SubVaultSync"
 else
   rm -f "$INSTALL_DIR"/subvault-sync-* "$INSTALL_DIR/$HOST_NAME.json"
 fi

@@ -84,7 +84,7 @@ try {
 
   await page.reload();
   await page.waitForSelector('.entry-actions');
-  await page.locator('.entry-actions button', { hasText: '复制' }).first().click();
+  await page.locator('.entry-actions button.primary-mini').first().click();
   await page.waitForTimeout(400);
   await page.bringToFront();
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());

@@ -57,6 +57,10 @@
               <span>已有密码库的主密码</span>
               <input id="syncImportPassword" type="password" autocomplete="current-password" placeholder="输入原主密码" />
             </label>
+            <label class="field">
+              <span>密钥文件（若已启用）</span>
+              <input id="syncImportKeyFile" type="file" accept=".svkey,application/octet-stream" />
+            </label>
             <p class="form-error" id="syncImportError" hidden></p>
             <button id="syncImportConfirm" class="btn primary block" type="button">导入并解锁</button>
             <button id="syncImportBack" class="link-btn block-link" type="button">返回</button>
@@ -159,7 +163,26 @@
           <div class="actions-row">
             <button id="addBtn" class="btn primary" type="button">+ 添加账号</button>
             <button id="manageBtn" class="btn" type="button">管理密码库</button>
-            <button id="genBtn" class="btn gen-btn" type="button" title="生成独立密码" aria-label="生成独立密码">⚡</button>
+          </div>
+
+          <div class="quick-gen" id="quickGen">
+            <div class="quick-gen-head">
+              <span>快速生成密码</span>
+              <small>直接生成并复制，无需打开二级页面</small>
+            </div>
+            <div class="quick-gen-row">
+              <code id="quickGenOutput">—</code>
+              <button id="quickGenRefresh" class="btn small" type="button">换一个</button>
+              <button id="quickGenCopy" class="btn primary small" type="button">复制</button>
+            </div>
+            <div class="quick-gen-options">
+              <label class="quick-gen-length"><span>长度</span><input id="quickGenLength" type="number" min="8" max="128" step="1" value="20" /></label>
+              <label class="check"><input id="quickGenUpper" type="checkbox" checked /><span>A–Z</span></label>
+              <label class="check"><input id="quickGenLower" type="checkbox" checked /><span>a–z</span></label>
+              <label class="check"><input id="quickGenDigits" type="checkbox" checked /><span>0–9</span></label>
+              <label class="check"><input id="quickGenSymbols" type="checkbox" checked /><span>!@#$</span></label>
+              <label class="check"><input id="quickGenReadable" type="checkbox" checked /><span>易读</span></label>
+            </div>
           </div>
 
           <div id="profileBar" class="profile-bar" hidden>
@@ -176,8 +199,8 @@
 
           <div id="pendingList" class="pending-list"></div>
 
-          <div class="section-title">
-            <h2>当前网站</h2>
+          <div class="section-title" id="siteTitle">
+            <h2 id="siteTitleText">本站账号</h2>
             <span id="matchCount"></span>
           </div>
           <div id="matchList" class="entry-list"></div>
@@ -250,43 +273,15 @@
       </div>
       <div class="dialog-body totp-body">
         <div id="totpCode" class="totp-code">------</div>
-        <div class="totp-progress" aria-hidden="true"><div id="totpProgressBar"></div></div>
+        <div class="totp-progress" id="totpProgress" aria-hidden="true"><div id="totpProgressBar"></div></div>
         <div id="totpMeta" class="muted-text"></div>
         <div class="button-row">
           <button id="totpCopyBtn" class="btn primary" type="button">复制动态码</button>
+          <button id="totpNextBtn" class="btn subtle" type="button" hidden>生成下一个</button>
         </div>
       </div>
     </dialog>
 
-    <dialog id="genDialog" class="dialog">
-      <div class="dialog-head">
-        <h3>生成密码</h3>
-        <button id="genClose" class="icon-btn" type="button" aria-label="关闭">×</button>
-      </div>
-      <div class="dialog-body">
-        <label class="field">
-          <span>长度 <b id="genLengthValue">20</b></span>
-          <input id="genLength" type="range" min="8" max="64" step="1" value="20" />
-        </label>
-        <div class="gen-options">
-          <label class="check"><input id="genLower" type="checkbox" checked /><span>小写 a-z</span></label>
-          <label class="check"><input id="genUpper" type="checkbox" checked /><span>大写 A-Z</span></label>
-          <label class="check"><input id="genDigits" type="checkbox" checked /><span>数字 2-9</span></label>
-          <label class="check"><input id="genSymbols" type="checkbox" checked /><span>符号 !@#$</span></label>
-          <label class="check"><input id="genReadable" type="checkbox" checked /><span>易读模式</span></label>
-          <label class="check"><input id="genPin" type="checkbox" /><span>PIN（仅数字）</span></label>
-        </div>
-        <div class="gen-output">
-          <code id="genOutput">—</code>
-          <button id="genCopy" class="btn subtle" type="button">复制</button>
-        </div>
-        <p class="fineprint">易读模式排除 1/l/I/0/O。仅在本机生成，不联网、不上传。</p>
-      </div>
-      <div class="dialog-actions">
-        <button id="genRegenerate" class="btn" type="button">重新生成</button>
-        <button id="genUse" class="btn primary" type="button">用于新账号</button>
-      </div>
-    </dialog>
 
     <div id="privacyShield" class="privacy-shield" hidden>
       <div class="privacy-shield-card">

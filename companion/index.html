@@ -65,6 +65,35 @@
   const AAD_V2 = 'subvault-share-v2';
   let current = null;
 
+  // SubVault private container:
+  //   bytes 0..4 magic "SVBAK", byte 5 version, byte 6 flags(bit0=gzip), byte 7 reserved.
+  const MAGIC = [0x53, 0x56, 0x42, 0x41, 0x4b];
+
+  function isContainer(bytes) {
+    if (bytes.length < 8) return false;
+    return MAGIC.every((value, index) => bytes[index] === value);
+  }
+
+  async function readPackage(file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (!isContainer(bytes)) {
+      // Legacy plaintext JSON share file.
+      return JSON.parse(textDecoder.decode(bytes));
+    }
+    const version = bytes[5];
+    if (version !== 1) throw new Error(`不支持的分享文件版本：${version}`);
+    const flags = bytes[6];
+    let payload = bytes.subarray(8);
+    if (flags & 1) {
+      if (typeof DecompressionStream !== 'function') {
+        throw new Error('当前浏览器不支持解压该分享文件，请使用新版 Chrome/Edge');
+      }
+      const stream = new Blob([payload]).stream().pipeThrough(new DecompressionStream('gzip'));
+      payload = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    return JSON.parse(textDecoder.decode(payload));
+  }
+
   async function bindExpiry(kdf, expiresAt) {
     const salt = b64(kdf.salt);
     const tag = textEncoder.encode(`|subvault-share|${expiresAt}`);
@@ -159,7 +188,7 @@
     try {
       if (!current && !$('file').files[0]) throw new Error('请选择 .svshare 文件');
       let pkg = current;
-      if (!pkg) pkg = JSON.parse(await $('file').files[0].text());
+      if (!pkg) pkg = await readPackage($('file').files[0]);
       const payload = await decryptPackage(pkg, $('password').value);
       render(payload);
     } catch (error) {

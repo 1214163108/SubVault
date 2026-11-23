@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createSharePackage } from '../src/lib/share.js';
+import { packContainer } from '../src/lib/container.js';
 
 const ROOT = path.resolve('.');
 const dir = path.join(ROOT, '.tmp-companion', String(Date.now()));
@@ -12,8 +13,11 @@ const pkg = await createSharePackage(
   [{ host: 'example.com', url: 'https://example.com', username: 'alice', password: 'alice-secret', notes: 'companion note' }],
   { password: 'share-pass-123', expiresAt: Date.now() + 3600_000 },
 );
-fs.writeFileSync(good, JSON.stringify(pkg));
-fs.writeFileSync(expired, JSON.stringify({ ...pkg, expiresAt: Date.now() - 1000 }));
+// Share files are now written as the private .svbak-style container.
+fs.writeFileSync(good, await packContainer(pkg));
+fs.writeFileSync(expired, await packContainer({ ...pkg, expiresAt: Date.now() - 1000 }));
+const legacy = path.join(dir, 'legacy.svshare');
+fs.writeFileSync(legacy, JSON.stringify(pkg));
 
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage();
@@ -40,6 +44,14 @@ out.title = await page.locator('#entries h3').innerText();
 out.username = await page.locator('.kv .mono').nth(0).innerText();
 out.summary = await page.locator('#summary').innerText();
 out.note = await page.locator('#entries .entry').innerText();
+// Legacy plaintext JSON share files must still open.
+await page.click('#clear');
+await page.setInputFiles('#file', legacy);
+await page.fill('#password', 'share-pass-123');
+await page.click('#open');
+await page.waitForSelector('#entries .entry');
+out.legacyTitle = await page.locator('#entries h3').innerText();
+
 out.errors = errors;
 out.pass =
   out.expiredError.includes('分享文件已过期') &&
@@ -48,6 +60,7 @@ out.pass =
   out.username === 'alice' &&
   out.summary === '1 个账号' &&
   out.note.includes('companion note') &&
+  out.legacyTitle === 'example.com' &&
   out.errors.length === 0;
 console.log(JSON.stringify(out, null, 2));
 await browser.close();

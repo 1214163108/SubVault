@@ -65,7 +65,7 @@ test('full PSL wildcard and exception rules', () => {
   assert.equal(suggestBaseDomain('mail.example.co.uk'), 'example.co.uk');
 });
 
-test('localhost/IP ports can be isolated without affecting normal domains', () => {
+test('port isolation applies to localhost, IPs and DNS names alike', () => {
   assert.equal(normalizePort('3000'), '3000');
   assert.equal(normalizePort('abc'), '');
   assert.equal(
@@ -78,7 +78,33 @@ test('localhost/IP ports can be isolated without affecting normal domains', () =
   );
   assert.equal(
     siteKeyFor('example.com', [], { port: '3000', portIsolation: true }),
+    'example.com:3000',
+  );
+  assert.equal(
+    siteKeyFor('mail.example.co.uk', [], { port: '8080', portIsolation: true }),
+    'example.co.uk:8080',
+  );
+  assert.equal(
+    siteKeyFor('example.com', [], { port: '3000', portIsolation: false }),
     'example.com',
+  );
+  assert.equal(
+    siteKeyFor('example.com', [], { portIsolation: true }),
+    'example.com',
+  );
+  assert.equal(
+    matchesHost({ host: 'example.com', port: '8080' }, 'example.com', [], {
+      port: '8080',
+      portIsolation: true,
+    }),
+    true,
+  );
+  assert.equal(
+    matchesHost({ host: 'example.com', port: '8080' }, 'example.com', [], {
+      port: '9090',
+      portIsolation: true,
+    }),
+    false,
   );
   assert.equal(
     matchesHost({ host: 'localhost', port: '3000' }, 'localhost', [], {

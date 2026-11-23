@@ -3,7 +3,28 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 const root = path.resolve(import.meta.dirname, '..');
-const syncDir = process.env.SUBVAULT_SYNC_DIR || path.join(root, 'native-host', 'data');
+const syncDir = path.join(root, '.tmp-host', 'sync-e2e-data');
+
+// Never touch a real host data directory. The host stores the live vault in
+// <host dir>/data (or %LOCALAPPDATA%\SubVaultSync); a test that wipes those
+// destroys the user's synced passwords.
+const realDirs = [
+  path.join(root, 'native-host', 'data'),
+  path.join(root, 'dist', 'subvault-sync-host-1.0.0', 'data'),
+  path.join(root, 'dist', 'native-host', 'data'),
+];
+// The host now keeps its vault in a stable per-user folder, so guard that too.
+for (const base of [process.env.LOCALAPPDATA, process.env.XDG_CONFIG_HOME, process.env.HOME]) {
+  if (base) realDirs.push(path.join(base, 'SubVaultSync'));
+}
+if (process.env.SUBVAULT_SYNC_DIR) {
+  throw new Error('test-sync-e2e must not be pointed at SUBVAULT_SYNC_DIR');
+}
+for (const dir of realDirs) {
+  if (path.resolve(syncDir) === path.resolve(dir)) {
+    throw new Error(`refusing to run against real host data dir: ${dir}`);
+  }
+}
 fs.rmSync(syncDir, { recursive: true, force: true });
 fs.mkdirSync(syncDir, { recursive: true });
 
@@ -18,7 +39,8 @@ async function openExtension(profile) {
       '--window-position=-32000,-32000',
       '--window-size=900,900',
     ],
-    env: { ...process.env, SUBVAULT_SYNC_DIR: syncDir },  });
+    env: { ...process.env, SUBVAULT_SYNC_DIR: syncDir },
+  });
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 15000 });
   const id = worker.url().split('/')[2];
@@ -41,6 +63,11 @@ try {
     chrome.runtime.sendMessage({ type: 'SV_SETUP', password: 'SubVault-Test-2026!Qm7#' }),
   );
   if (!setupA?.ok) throw new Error(`A setup: ${setupA?.error}`);
+  // The privacy shield appears whenever the page loses focus, which makes the
+  // import-gate clicks below flaky; these tests never rely on it.
+  await a.page.evaluate(() =>
+    chrome.runtime.sendMessage({ type: 'SV_SET_SETTINGS', settings: { privacyShieldOnBlur: false } }),
+  );
   await a.page.evaluate(() =>
     chrome.runtime.sendMessage({
       type: 'SV_ADD_ENTRY',
@@ -74,6 +101,10 @@ try {
     if (shield) shield.hidden = true;
   });
   await b.page.click('#gateImportChoose');
+  await b.page.evaluate(() => {
+    const shield = document.getElementById('privacyShield');
+    if (shield) shield.hidden = true;
+  });
   await b.page.fill('#gateImportPassword', 'SubVault-Test-2026!Qm7#');
   await b.page.click('#gateImportBtn');
   await b.page.waitForSelector('#gate', { state: 'hidden', timeout: 15000 });

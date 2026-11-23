@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -56,8 +58,27 @@ namespace SubVaultSync
             string custom = Environment.GetEnvironmentVariable("SUBVAULT_SYNC_DIR");
             if (!String.IsNullOrEmpty(custom)) return custom;
 
-            // Prefer the host's own folder. This works when the host is extracted
-            // to a writable user folder and avoids restricted-profile ACLs.
+            // The vault must not live next to the host binary: reinstalling or
+            // moving the host would silently look like "vault disappeared" and
+            // the other browser would fail to decrypt whatever replaced it.
+            string stable = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "SubVaultSync");
+            try
+            {
+                Directory.CreateDirectory(stable);
+                string probe = Path.Combine(stable, ".write-test");
+                File.WriteAllText(probe, "ok");
+                File.Delete(probe);
+                MigrateLegacyData(stable);
+                return stable;
+            }
+            catch
+            {
+            }
+
+            // A locked-down profile: fall back to the host folder so sync still
+            // works for this install.
             try
             {
                 string exeDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -70,9 +91,31 @@ namespace SubVaultSync
             {
             }
 
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "SubVaultSync");
+            return Path.Combine(Path.GetTempPath(), "SubVaultSync");
+        }
+
+        /// <summary>
+        /// Builds up to 1.5.x kept the vault in a "data" folder beside the host
+        /// binary. Copy that state into the stable folder once, so upgrading or
+        /// reinstalling the host never loses the vault.
+        /// </summary>
+        private static void MigrateLegacyData(string stableDir)
+        {
+            try
+            {
+                string legacyDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
+                if (!Directory.Exists(legacyDir)) return;
+                foreach (string source in Directory.GetFiles(legacyDir, "*.json"))
+                {
+                    string target = Path.Combine(stableDir, Path.GetFileName(source));
+                    if (File.Exists(target)) continue;
+                    try { File.Copy(source, target, false); }
+                    catch { }
+                }
+            }
+            catch
+            {
+            }
         }
         private static readonly string StatePath = Path.Combine(DataDir, "state.json");
         private static readonly Mutex StateMutex = new Mutex(false, "Local\\SubVaultSyncState");
@@ -304,17 +347,22 @@ namespace SubVaultSync
             {
                 request.Headers["Authorization"] = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + password));
             }
+            string contentType = body != null ? "application/json" : null;
             if (headers != null)
             {
                 foreach (var pair in headers)
                 {
                     if (String.Equals(pair.Key, "Accept", StringComparison.OrdinalIgnoreCase)) request.Accept = pair.Value;
+                    else if (String.Equals(pair.Key, "Content-Type", StringComparison.OrdinalIgnoreCase)) contentType = pair.Value;
+                    else if (String.Equals(pair.Key, "Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
+                    else if (String.Equals(pair.Key, "User-Agent", StringComparison.OrdinalIgnoreCase)) request.UserAgent = pair.Value;
+                    else if (String.Equals(pair.Key, "Referer", StringComparison.OrdinalIgnoreCase)) request.Referer = pair.Value;
                     else request.Headers[pair.Key] = pair.Value;
                 }
             }
             if (body != null)
             {
-                request.ContentType = "application/json";
+                request.ContentType = String.IsNullOrEmpty(contentType) ? "application/json" : contentType;
                 request.ContentLength = body.Length;
                 using (var stream = request.GetRequestStream()) stream.Write(body, 0, body.Length);
             }
@@ -365,6 +413,7 @@ namespace SubVaultSync
                 case 401:
                 case 403: return "WebDAV 认证失败，请检查用户名和密码";
                 case 404: return "WebDAV 路径不存在：" + "/subvault/state.json";
+                case 409: return "WebDAV 目录创建失败（HTTP 409）：请确认地址指向已存在且可写的目录，例如 https://dav.jianguoyun.com/dav";
             }
             string snippet = result.Body.Length > 0 ? Encoding.UTF8.GetString(result.Body).Trim() : "";
             if (snippet.Length > 200) snippet = snippet.Substring(0, 200);
@@ -435,6 +484,19 @@ namespace SubVaultSync
             };
         }
 
+        private static string WebDavBackupName(object value)
+        {
+            string name = Convert.ToString(value) ?? "";
+            if (name.Length == 0 || name.Length > 120) return "";
+            foreach (char c in name)
+            {
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+                if (!ok) return "";
+            }
+            if (!name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return "";
+            return name;
+        }
+
         private static Dictionary<string, object> WebDavPush(Dictionary<string, object> message)
         {
             string user, password;
@@ -455,16 +517,176 @@ namespace SubVaultSync
             var headers = new Dictionary<string, string>();
             if (!String.IsNullOrEmpty(etag)) headers["If-Match"] = etag;
             else headers["If-None-Match"] = "*";
+            if (String.IsNullOrEmpty(etag))
+                WebDavMkcol(endpoint, user, password, VaultKeyFrom(message));
             var result = WebDavRequest("PUT", endpoint, user, password, body, headers);
-            if (result.Status == 409 && String.IsNullOrEmpty(etag) && WebDavMkcol(endpoint, user, password, VaultKeyFrom(message)))
+            if ((result.Status == 409 || result.Status == 404) && String.IsNullOrEmpty(etag) && WebDavMkcol(endpoint, user, password, VaultKeyFrom(message)))
                 result = WebDavRequest("PUT", endpoint, user, password, body, headers);
             if (result.Status == 412 || result.Status == 409)
                 return new Dictionary<string, object> { { "ok", false }, { "conflict", true }, { "status", result.Status } };
             if (result.Status != 200 && result.Status != 201 && result.Status != 204)
                 return Error(WebDavFailure(result));
+            string backupName = WebDavBackupName(message.ContainsKey("backupName") ? message["backupName"] : null);
+            string archiveError = "";
+            if (backupName.Length > 0)
+            {
+                var archiveBuilder = new UriBuilder(endpoint);
+                string path = archiveBuilder.Path;
+                string suffix = "/state.json";
+                if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                    archiveBuilder.Path = path.Substring(0, path.Length - suffix.Length) + "/" + backupName;
+                else
+                    archiveBuilder.Path = path.TrimEnd('/') + "/" + backupName;
+                var archiveHeaders = new Dictionary<string, string>
+                {
+                    { "If-None-Match", "*" }, { "Accept", "application/json" }
+                };
+                var archive = WebDavRequest("PUT", archiveBuilder.Uri.ToString(), user, password, body, archiveHeaders);
+                if (archive.Status != 200 && archive.Status != 201 && archive.Status != 204)
+                    archiveError = "历史备份副本写入失败（HTTP " + archive.Status + "）";
+            }
             return new Dictionary<string, object>
             {
-                { "ok", true }, { "revision", baseRevision + 1 }, { "updatedAt", now }, { "etag", result.ETag }
+                { "ok", true }, { "revision", baseRevision + 1 }, { "updatedAt", now },
+                { "etag", result.ETag }, { "name", backupName }, { "archiveError", archiveError }
+            };
+        }
+
+        private static readonly Regex BackupNamePattern =
+            new Regex(@"^subvault-\d{8}-\d{6}\.json$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static string WebDavDirectory(string endpoint)
+        {
+            var builder = new UriBuilder(endpoint);
+            string path = builder.Path;
+            const string suffix = "/state.json";
+            if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                builder.Path = path.Substring(0, path.Length - suffix.Length);
+            return builder.Uri.ToString().TrimEnd('/');
+        }
+
+        private static long ParseDavModified(string raw)
+        {
+            if (String.IsNullOrWhiteSpace(raw)) return 0;
+            DateTimeOffset parsed;
+            if (DateTimeOffset.TryParse(raw.Trim(), CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out parsed))
+                return parsed.ToUnixTimeMilliseconds();
+            return 0;
+        }
+
+        private static string XmlTagText(string block, string tag)
+        {
+            int open = block.IndexOf("<" + tag, StringComparison.OrdinalIgnoreCase);
+            if (open < 0) return "";
+            int start = block.IndexOf('>', open);
+            if (start < 0) return "";
+            start += 1;
+            int end = block.IndexOf("</" + tag, start, StringComparison.OrdinalIgnoreCase);
+            if (end < 0) return "";
+            return block.Substring(start, end - start).Trim();
+        }
+
+        private static List<Dictionary<string, object>> WebDavListArchives(string endpoint, string user, string password)
+        {
+            string directory = WebDavDirectory(endpoint);
+            string query = "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                + "<d:propfind xmlns:d=\"DAV:\"><d:prop><d:getlastmodified/>"
+                + "<d:getcontentlength/><d:resourcetype/></d:prop></d:propfind>";
+            var headers = new Dictionary<string, string>
+            {
+                { "Depth", "1" }, { "Content-Type", "application/xml; charset=utf-8" }
+            };
+            var result = WebDavRequest("PROPFIND", directory, user, password, Encoding.UTF8.GetBytes(query), headers);
+            var archives = new List<Dictionary<string, object>>();
+            if (result.Status == 405 || result.Status == 501) return archives;
+            if (result.Status != 207 && result.Status != 200)
+                throw new InvalidOperationException(WebDavFailure(result));
+            string xml = Encoding.UTF8.GetString(result.Body);
+            string[] blocks = xml.Split(new[] { "<d:response" }, StringSplitOptions.None);
+            for (int index = 1; index < blocks.Length; index += 1)
+            {
+                string block = blocks[index];
+                string href = XmlTagText(block, "d:href");
+                if (href.Length == 0) href = XmlTagText(block, "href");
+                if (href.Length == 0) continue;
+                string name = href;
+                int slash = name.LastIndexOf('/');
+                if (slash >= 0) name = name.Substring(slash + 1);
+                try { name = Uri.UnescapeDataString(name); } catch (UriFormatException) { }
+                if (!BackupNamePattern.IsMatch(name)) continue;
+                long modified = ParseDavModified(XmlTagText(block, "d:getlastmodified"));
+                if (modified == 0) modified = ParseDavModified(XmlTagText(block, "getlastmodified"));
+                long size = 0;
+                long.TryParse(XmlTagText(block, "d:getcontentlength"), out size);
+                archives.Add(new Dictionary<string, object>
+                {
+                    { "name", name }, { "modified", modified }, { "size", size }
+                });
+            }
+            archives.Sort((a, b) =>
+            {
+                long left = Convert.ToInt64(a["modified"]);
+                long right = Convert.ToInt64(b["modified"]);
+                if (left != right) return right.CompareTo(left);
+                return String.CompareOrdinal(Convert.ToString(b["name"]), Convert.ToString(a["name"]));
+            });
+            return archives;
+        }
+
+        private static Dictionary<string, object> WebDavHistory(Dictionary<string, object> message)
+        {
+            string user, password;
+            string endpoint = WebDavEndpointFromMessage(message, out user, out password);
+            var archives = WebDavListArchives(endpoint, user, password);
+            return new Dictionary<string, object>
+            {
+                { "ok", true }, { "archives", archives }, { "count", archives.Count }
+            };
+        }
+
+        private static Dictionary<string, object> WebDavPrune(Dictionary<string, object> message)
+        {
+            string user, password;
+            string endpoint = WebDavEndpointFromMessage(message, out user, out password);
+            int keep = message.ContainsKey("keep") ? Math.Max(0, Convert.ToInt32(message["keep"])) : 0;
+            int olderThanDays = message.ContainsKey("olderThanDays")
+                ? Math.Max(0, Convert.ToInt32(message["olderThanDays"]))
+                : 0;
+            if (keep == 0 && olderThanDays == 0)
+                return new Dictionary<string, object>
+                {
+                    { "ok", true }, { "deleted", new object[0] }, { "failures", new object[0] },
+                    { "skipped", "未配置保留数量或过期天数" }
+                };
+            var archives = WebDavListArchives(endpoint, user, password);
+            long cutoff = olderThanDays > 0
+                ? DateTimeOffset.UtcNow.AddDays(-olderThanDays).ToUnixTimeMilliseconds()
+                : 0;
+            string directory = WebDavDirectory(endpoint);
+            var deleted = new List<object>();
+            var failures = new List<object>();
+            for (int index = 0; index < archives.Count; index += 1)
+            {
+                var archive = archives[index];
+                long modified = Convert.ToInt64(archive["modified"]);
+                bool drop = keep > 0 && index >= keep;
+                if (cutoff > 0 && modified > 0 && modified < cutoff) drop = true;
+                if (!drop) continue;
+                string name = Convert.ToString(archive["name"]);
+                var result = WebDavRequest("DELETE", directory + "/" + name, user, password, null, null);
+                if (result.Status == 200 || result.Status == 204 || result.Status == 404)
+                {
+                    deleted.Add(name);
+                    continue;
+                }
+                failures.Add(name + "：HTTP " + result.Status);
+            }
+            return new Dictionary<string, object>
+            {
+                { "ok", true }, { "deleted", deleted }, { "failures", failures },
+                { "remaining", archives.Count - deleted.Count },
+                { "keep", keep }, { "olderThanDays", olderThanDays }
             };
         }
 
@@ -690,6 +912,8 @@ namespace SubVaultSync
                 case "webdav-status": return WebDavStatus(message);
                 case "webdav-pull": return WebDavPull(message);
                 case "webdav-push": return WebDavPush(message);
+                case "webdav-history": return WebDavHistory(message);
+                case "webdav-prune": return WebDavPrune(message);
                 case "device-status": return DeviceStatus(message);
                 case "device-protect": return DeviceProtect(message);
                 case "device-unlock": return DeviceUnlock(message);

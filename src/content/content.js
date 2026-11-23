@@ -10,10 +10,14 @@
     savePromptPosition: 'top-right',
     theme: 'system',
     material: 'solid',
+    accentColor: 'indigo',
+    glassStrength: 'strong',
+    uiRadius: 'soft',
     showIcon: true,
     takeoverMode: true,
     clearNativeAutofill: true,
     uiLanguage: 'auto',
+    otpToastSeconds: 5,
   };
 
   const UI_EN = {
@@ -62,9 +66,23 @@
     '用 SubVault 填充密码': 'Fill with SubVault',
     'SubVault 账号列表': 'SubVault accounts',
     '账号列表': 'Accounts',
+    '动态验证码': 'One-time code',
+    '复制验证码': 'Copy code',
+    '填入当前输入框': 'Fill current field',
+    '已填入动态验证码': 'One-time code filled',
+    '动态码已复制': 'Code copied',
+    '请先点击页面上的验证码输入框': 'Click the code field on the page first',
     '管理密码库': 'Manage vault',
     '记录于': 'Recorded',
     '此网站还没有保存的账号': 'No accounts saved for this site yet',
+    '当前网站': 'This site',
+    '当前账号': 'Current account',
+    '秒后刷新': 's until refresh',
+    '本次登录信息未保存': 'This login was not saved',
+    '本次登录信息未保存。解锁后即可使用 SubVault 管理该站点的密码。':
+      'This login was not saved. Unlock SubVault to manage this site password.',
+    '创建本地加密密码库后，登录信息才会被安全保存。':
+      'Create a local encrypted vault so logins can be saved securely.',
   };
   const textOriginals = new WeakMap();
   const attributeOriginals = new WeakMap();
@@ -208,6 +226,10 @@
     activeIndex: 0,
     anchorField: null,
     genField: null,
+    otpField: null,
+    otpEntryId: '',
+    otpRemaining: 0,
+    otpPeriod: 30,
     autoOpened: new WeakSet(),
     banner: null,
     pendingQueue: [],
@@ -339,12 +361,49 @@
     return /new.?password|confirm|repeat|retype|newpass|新密码|确认密码|重复密码/.test(haystack);
   }
 
+  const OTP_TEXT_RE =
+    /\botp\b|one.?time|verification|\bverify\b|auth.?code|security.?code|sms.?code|two.?factor|\b2fa\b|\bmfa\b|验证码|动态码|动态密码|校验码|安全码|令牌|token.?code/i;
+
+  /** Segmented OTP widgets (one box per digit) expose no useful attributes. */
+  function isSegmentedOtpInput(input) {
+    let node = input.parentElement;
+    for (let depth = 0; node && depth < 4; depth += 1) {
+      const marker = `${node.className || ''} ${node.getAttribute?.('data-testid') || ''}`;
+      if (/otp|code.?input|pin.?input|verification|vi__|digit.?input|auth.?code/i.test(marker)) {
+        return true;
+      }
+      const siblings = node.querySelectorAll?.('input');
+      if (
+        siblings &&
+        siblings.length >= 4 &&
+        [...siblings].filter((peer) => Number(peer.maxLength) === 1).length >= 3
+      ) {
+        return true;
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
   function looksLikeOtp(input) {
-    const haystack = `${input.name} ${input.id} ${originalAutocomplete(input)} ${
-      input.placeholder || ''
-    }`.toLowerCase();
+    if (!(input instanceof HTMLInputElement)) return false;
     if (originalAutocomplete(input) === 'one-time-code') return true;
-    return /\botp\b|one.?time|verification.?code|验证码|动态码|auth.?code/.test(haystack);
+    const haystack = [
+      input.name,
+      input.id,
+      input.className,
+      input.placeholder || '',
+      input.getAttribute('aria-label') || '',
+      input.getAttribute('title') || '',
+      input.getAttribute('data-testid') || '',
+      input.getAttribute('data-test') || '',
+      input.getAttribute('data-field') || '',
+      input.getAttribute('inputmode') || input.getAttribute('inputMode') || '',
+    ]
+      .join(' ')
+      .toLowerCase();
+    if (OTP_TEXT_RE.test(haystack)) return true;
+    return isSegmentedOtpInput(input);
   }
 
   function isUsernameCandidate(input) {
@@ -854,26 +913,29 @@
       z-index: 2147483647;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
       color: #0f172a; -webkit-font-smoothing: antialiased;
+      --sv-accent: #4f46e5; --sv-accent-2: #7c3aed;
+      --sv-accent-soft: #eef2ff; --sv-accent-border: #e0e7ff;
+      --sv-radius: 15px;
     }
     button { font-family: inherit; }
     .sv-trigger {
       position: fixed; width: 28px; height: 28px; padding: 6px;
       display: flex; align-items: center; justify-content: center;
       border: 1px solid rgba(255,255,255,.24); border-radius: 9px;
-      background: linear-gradient(135deg,#4f46e5,#7c3aed);
+      background: linear-gradient(135deg,color-mix(in srgb, var(--sv-accent) 82%, #0f172a),color-mix(in srgb, var(--sv-accent-2) 76%, #0f172a));
       color: #fff; cursor: pointer; pointer-events: auto;
-      box-shadow: 0 4px 12px rgba(79,70,229,.38), inset 0 1px 0 rgba(255,255,255,.28);
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--sv-accent) 40%, transparent), inset 0 1px 0 rgba(255,255,255,.28);
       transition: transform .12s ease, box-shadow .12s ease;
     }
-    .sv-trigger:hover { transform: translateY(-1px) scale(1.04); box-shadow: 0 6px 16px rgba(79,70,229,.48); }
+    .sv-trigger:hover { transform: translateY(-1px) scale(1.04); box-shadow: 0 6px 16px color-mix(in srgb, var(--sv-accent) 52%, transparent); }
     .sv-trigger:active { transform: scale(.96); }
     .sv-trigger svg { width: 16px; height: 16px; }
 
     .sv-gen {
       position: fixed; height: 28px; padding: 0 10px 0 8px;
       display: flex; align-items: center; gap: 5px;
-      border: 1px solid rgba(79,70,229,.28); border-radius: 9px;
-      background: #fff; color: #4338ca; cursor: pointer; pointer-events: auto;
+      border: 1px solid color-mix(in srgb, var(--sv-accent) 30%, transparent); border-radius: 9px;
+      background: #fff; color: var(--sv-accent); cursor: pointer; pointer-events: auto;
       font-size: 12px; font-weight: 600; line-height: 1; white-space: nowrap;
       box-shadow: 0 4px 14px rgba(15,23,42,.14);
       transition: transform .12s ease, box-shadow .12s ease;
@@ -948,17 +1010,17 @@
       padding: 8px 9px; border: 0; border-radius: 9px; background: transparent;
       text-align: left; cursor: pointer; color: inherit;
     }
-    .sv-item:hover, .sv-item:focus-visible { background: #eef2ff; outline: none; }
+    .sv-item:hover, .sv-item:focus-visible { background: var(--sv-accent-soft); outline: none; }
     .sv-avatar {
       width: 30px; height: 30px; border-radius: 8px; flex: none;
       display: flex; align-items: center; justify-content: center;
-      background: #eef2ff; color: #4f46e5; font-size: 12px; font-weight: 750;
-      border: 1px solid #e0e7ff;
+      background: var(--sv-accent-soft); color: var(--sv-accent); font-size: 12px; font-weight: 750;
+      border: 1px solid var(--sv-accent-border);
     }
     .sv-item-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; }
     .sv-item-title { font-size: 12.5px; font-weight: 600; color: #0f172a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sv-item-sub { font-size: 10.5px; color: #64748b; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sv-fill-hint { font-size: 10.5px; font-weight: 650; color: #4f46e5; opacity: 0; transition: opacity .1s; flex: none; }
+    .sv-fill-hint { font-size: 10.5px; font-weight: 650; color: var(--sv-accent); opacity: 0; transition: opacity .1s; flex: none; }
     .sv-item:hover .sv-fill-hint { opacity: 1; }
     .sv-panel-foot {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -967,7 +1029,7 @@
     }
     .sv-link {
       border: 0; background: transparent; padding: 0; cursor: pointer;
-      color: #4f46e5; font-size: inherit; font-weight: 600;
+      color: var(--sv-accent); font-size: inherit; font-weight: 600;
     }
     .sv-link:hover { text-decoration: underline; }
 
@@ -1028,16 +1090,25 @@
     .sv-banner-actions .sv-ignore:hover { color: #64748b; }
 
     .sv-toast {
-      position: fixed; max-width: min(460px, calc(100vw - 32px));
-      background: rgba(15,23,42,.94); color: #f8fafc;
-      font-size: 12px; padding: 10px 14px; border-radius: 12px;
-      box-shadow: 0 10px 30px rgba(15,23,42,.28);
+      position: fixed; width: min(390px, calc(100vw - 32px));
+      max-width: min(390px, calc(100vw - 32px));
+      background: #fff; color: #0f172a;
+      font-size: 12px; padding: 12px 14px 16px; border-radius: 14px;
+      border: 1px solid rgba(15,23,42,.1);
+      box-shadow: 0 22px 50px rgba(15,23,42,.18);
       pointer-events: none; line-height: 1.45;
-      overflow-wrap: anywhere; text-align: left;
+      overflow-wrap: anywhere; text-align: left; overflow: hidden;
     }
-    .sv-toast-title { font-size: 12.5px; font-weight: 700; color: #fff; }
-    .sv-toast-detail { font-size: 10.5px; color: rgba(248,250,252,.72); margin-top: 2px; }
-    .sv-toast.is-error { background: #b91c1c; }
+    .sv-toast-copy { min-width: 0; }
+    .sv-toast-title { font-size: 13px; font-weight: 700; color: #0f172a; line-height: 1.35; }
+    .sv-toast-detail { font-size: 11px; color: #64748b; margin-top: 3px; line-height: 1.45; }
+    .sv-toast.is-error {
+      background: #fff5f5; border-color: rgba(239,68,68,.4);
+    }
+    .sv-toast.is-error .sv-toast-title { color: #b91c1c; }
+    .sv-toast-track { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(15,23,42,.08); }
+    .sv-toast-bar { display: block; width: 100%; height: 100%; background: linear-gradient(90deg, var(--sv-accent,#4f46e5), var(--sv-accent-2,#06b6d4)); }
+    .sv-toast.is-error .sv-toast-bar { background: linear-gradient(90deg, #ef4444, #f97316); }
     .sv-toast.pos-top-left { top: 16px; left: 16px; right: auto; bottom: auto; animation: svToastCornerIn .16s ease-out; }
     .sv-toast.pos-top-right { top: 16px; right: 16px; left: auto; bottom: auto; animation: svToastCornerIn .16s ease-out; }
     .sv-toast.pos-bottom-left { bottom: 16px; left: 16px; right: auto; top: auto; animation: svToastCornerIn .16s ease-out; }
@@ -1054,9 +1125,46 @@
       to { opacity: 1; transform: translate(-50%, -50%); }
     }
 
+
+    .sv-otp {
+      position: fixed; top: 16px; right: 16px; width: 318px;
+      max-width: calc(100vw - 32px);
+      padding: 14px 16px 18px; border-radius: var(--sv-radius, 14px);
+      background: rgba(255,255,255,.96);
+      border: 1px solid rgba(148,163,184,.32);
+      box-shadow: 0 22px 56px rgba(15,23,42,.22);
+      color: #0f172a; pointer-events: auto; overflow: hidden;
+      animation: svToastCornerIn .18s ease-out;
+    }
+    .sv-otp[hidden] { display: none; }
+    .sv-otp-head { display: flex; align-items: flex-start; gap: 9px; }
+    .sv-otp-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .sv-otp-copy strong { font-size: 12.5px; }
+    .sv-otp-copy small { font-size: 10.5px; color: #64748b; overflow-wrap: anywhere; }
+    .sv-otp-code {
+      margin: 12px 0 10px; font: 700 28px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: .16em; color: var(--sv-accent, #4f46e5);
+      font-variant-numeric: tabular-nums;
+    }
+    .sv-otp-actions { display: flex; align-items: center; gap: 8px; }
+    .sv-otp-actions .sv-btn { padding: 6px 11px; font-size: 11.5px; }
+    .sv-otp-track { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(148,163,184,.25); }
+    .sv-otp-bar { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, var(--sv-accent, #4f46e5), var(--sv-accent-2, #06b6d4)); }
+    :host([data-theme="dark"]) .sv-otp { background: rgba(17,24,39,.96); color: #f1f5f9; border-color: rgba(255,255,255,.14); }
+    :host([data-theme="dark"]) .sv-otp-copy small { color: #94a3b8; }
+    :host([data-material="glass"]) .sv-otp { backdrop-filter: blur(22px) saturate(170%); background: rgba(255,255,255,.74); }
+    :host([data-material="liquid"]) .sv-otp { backdrop-filter: blur(28px) saturate(190%); background: rgba(255,255,255,.62); border-color: color-mix(in srgb, var(--sv-accent) 22%, rgba(255,255,255,.5)); }
+    :host([data-theme="dark"][data-material="glass"]) .sv-otp { background: rgba(17,24,39,.76); }
+    :host([data-theme="dark"][data-material="liquid"]) .sv-otp { background: rgba(17,24,39,.68); }
+
     @media (prefers-color-scheme: dark) {
       .sv-layer { color: #e2e8f0; }
       .sv-panel, .sv-banner { background: #111827; border-color: rgba(255,255,255,.1); }
+      .sv-toast { background: #111827; border-color: rgba(255,255,255,.14); }
+      .sv-toast-title { color: #f1f5f9; }
+      .sv-toast-detail { color: #94a3b8; }
+      .sv-toast-track { background: rgba(255,255,255,.12); }
+      .sv-toast.is-error { background: #2a1115; border-color: rgba(239,68,68,.45); }
       .sv-panel-head, .sv-panel-foot { border-color: rgba(255,255,255,.08); }
       .sv-head-title, .sv-banner-title, .sv-item-title { color: #f1f5f9; }
       .sv-head-sub, .sv-banner-sub, .sv-item-sub, .sv-panel-foot { color: #94a3b8; }
@@ -1109,6 +1217,89 @@
     :host([data-theme="light"]) .sv-avatar { background: #eef2ff; border-color: #e0e7ff; color: #4f46e5; }
     :host([data-theme="light"]) .sv-empty { color: #94a3b8; }
     :host([data-theme="light"]) .sv-fill-hint { color: #4f46e5; }
+
+    :host([data-accent="ocean"]) .sv-layer {
+      --sv-accent: #0284c7; --sv-accent-2: #0891b2;
+      --sv-accent-soft: #e0f2fe; --sv-accent-border: #bae6fd;
+    }
+    :host([data-theme="dark"][data-accent="ocean"]) .sv-layer {
+      --sv-accent: #38bdf8; --sv-accent-2: #22d3ee;
+      --sv-accent-soft: rgba(56,189,248,.16); --sv-accent-border: rgba(56,189,248,.32);
+    }
+    :host([data-accent="emerald"]) .sv-layer {
+      --sv-accent: #059669; --sv-accent-2: #0d9488;
+      --sv-accent-soft: #ecfdf5; --sv-accent-border: #a7f3d0;
+    }
+    :host([data-theme="dark"][data-accent="emerald"]) .sv-layer {
+      --sv-accent: #34d399; --sv-accent-2: #2dd4bf;
+      --sv-accent-soft: rgba(52,211,153,.16); --sv-accent-border: rgba(52,211,153,.32);
+    }
+    :host([data-accent="rose"]) .sv-layer {
+      --sv-accent: #e11d48; --sv-accent-2: #db2777;
+      --sv-accent-soft: #fff1f2; --sv-accent-border: #fecdd3;
+    }
+    :host([data-theme="dark"][data-accent="rose"]) .sv-layer {
+      --sv-accent: #fb7185; --sv-accent-2: #f472b6;
+      --sv-accent-soft: rgba(251,113,133,.16); --sv-accent-border: rgba(251,113,133,.32);
+    }
+    :host([data-accent="amber"]) .sv-layer {
+      --sv-accent: #d97706; --sv-accent-2: #ea580c;
+      --sv-accent-soft: #fffbeb; --sv-accent-border: #fde68a;
+    }
+    :host([data-theme="dark"][data-accent="amber"]) .sv-layer {
+      --sv-accent: #fbbf24; --sv-accent-2: #fb923c;
+      --sv-accent-soft: rgba(251,191,36,.16); --sv-accent-border: rgba(251,191,36,.32);
+    }
+    :host([data-accent="violet"]) .sv-layer {
+      --sv-accent: #7c3aed; --sv-accent-2: #9333ea;
+      --sv-accent-soft: #f5f3ff; --sv-accent-border: #ddd6fe;
+    }
+    :host([data-theme="dark"][data-accent="violet"]) .sv-layer {
+      --sv-accent: #a78bfa; --sv-accent-2: #c084fc;
+      --sv-accent-soft: rgba(167,139,250,.16); --sv-accent-border: rgba(167,139,250,.32);
+    }
+
+    :host([data-glass="strong"][data-material="glass"]) .sv-panel,
+    :host([data-glass="strong"][data-material="glass"]) .sv-banner {
+      -webkit-backdrop-filter: blur(32px) saturate(185%);
+      backdrop-filter: blur(32px) saturate(185%);
+      background: rgba(255,255,255,.62);
+      box-shadow: 0 28px 70px rgba(15,23,42,.26), inset 0 1px 0 rgba(255,255,255,.9);
+    }
+    :host([data-theme="dark"][data-glass="strong"][data-material="glass"]) .sv-panel,
+    :host([data-theme="dark"][data-glass="strong"][data-material="glass"]) .sv-banner {
+      background: rgba(17,24,39,.62);
+    }
+    :host([data-glass="ultra"][data-material="glass"]) .sv-panel,
+    :host([data-glass="ultra"][data-material="glass"]) .sv-banner,
+    :host([data-glass="ultra"][data-material="liquid"]) .sv-panel,
+    :host([data-glass="ultra"][data-material="liquid"]) .sv-banner {
+      -webkit-backdrop-filter: blur(52px) saturate(220%);
+      backdrop-filter: blur(52px) saturate(220%);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.88), rgba(255,255,255,.72));
+      border-color: rgba(255,255,255,.82);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,1),
+        inset 0 -1px 0 color-mix(in srgb, var(--sv-accent) 18%, transparent),
+        0 32px 86px rgba(15,23,42,.3);
+    }
+    :host([data-theme="dark"][data-glass="ultra"][data-material="glass"]) .sv-panel,
+    :host([data-theme="dark"][data-glass="ultra"][data-material="glass"]) .sv-banner,
+    :host([data-theme="dark"][data-glass="ultra"][data-material="liquid"]) .sv-panel,
+    :host([data-theme="dark"][data-glass="ultra"][data-material="liquid"]) .sv-banner {
+      background:
+        radial-gradient(120% 85% at 8% 0%, rgba(129,140,248,.26), transparent 58%),
+        linear-gradient(135deg, rgba(17,24,39,.88), rgba(30,27,75,.8));
+      border-color: rgba(165,180,252,.32);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.24),
+        0 32px 86px rgba(0,0,0,.6);
+    }
+    :host([data-radius="round"]) .sv-panel,
+    :host([data-radius="round"]) .sv-banner { border-radius: 22px; }
+    :host([data-radius="square"]) .sv-panel,
+    :host([data-radius="square"]) .sv-banner { border-radius: 9px; }
 
     :host([data-material="glass"]) .sv-panel,
     :host([data-material="glass"]) .sv-banner {
@@ -1213,6 +1404,22 @@
             <button class="sv-btn sv-primary sv-unlock" type="button" hidden>去解锁</button>
           </div>
         </section>
+        <section class="sv-otp" data-subvault-otp hidden aria-live="polite">
+          <div class="sv-otp-head">
+            <div class="sv-mini-logo">S</div>
+            <div class="sv-otp-copy">
+              <strong>动态验证码</strong>
+              <small data-i18n-raw></small>
+            </div>
+            <button class="sv-x sv-otp-close" type="button" aria-label="关闭">×</button>
+          </div>
+          <div class="sv-otp-code" data-subvault-otp-code>------</div>
+          <div class="sv-otp-actions">
+            <button class="sv-btn sv-primary sv-otp-copy-btn" type="button">复制验证码</button>
+            <button class="sv-btn sv-ghost sv-otp-fill" type="button">填入当前输入框</button>
+          </div>
+          <div class="sv-otp-track"><span class="sv-otp-bar"></span></div>
+        </section>
         <div class="sv-toast" hidden role="status"></div>
       </div>
     `;
@@ -1239,6 +1446,13 @@
       ignore: shadow.querySelector('.sv-ignore'),
       unlock: shadow.querySelector('.sv-unlock'),
       toast: shadow.querySelector('.sv-toast'),
+      otp: shadow.querySelector('.sv-otp'),
+      otpCode: shadow.querySelector('[data-subvault-otp-code]'),
+      otpSub: shadow.querySelector('.sv-otp-copy small'),
+      otpBar: shadow.querySelector('.sv-otp-bar'),
+      otpCopy: shadow.querySelector('.sv-otp-copy-btn'),
+      otpFill: shadow.querySelector('.sv-otp-fill'),
+      otpClose: shadow.querySelector('.sv-otp-close'),
     };
     document.documentElement.appendChild(rootHost);
     installLocalization(shadow);
@@ -1290,6 +1504,10 @@
       if (!item) return;
       void copyAlias(item.dataset.email);
     });
+
+    ui.otpClose?.addEventListener('click', () => hideSiteOtp());
+    ui.otpCopy?.addEventListener('click', () => void copySiteOtp());
+    ui.otpFill?.addEventListener('click', () => fillSiteOtp());
 
     ui.panelClose.addEventListener('click', () => hidePanel());
     ui.manage.addEventListener('click', () => {
@@ -1418,7 +1636,9 @@
       ) {
         pieces.push(label);
       }
-      if (entry.passwordChangedAt) pieces.push(`记录于 ${formatTime(entry.passwordChangedAt)}`);
+      if (entry.passwordChangedAt) {
+        pieces.push(`${tr('记录于')} ${formatTime(entry.passwordChangedAt)}`);
+      }
       sub.textContent = pieces.join(' · ');
       copy.append(title, sub);
 
@@ -1595,18 +1815,31 @@
     ui.toast.replaceChildren();
     const titleText = String(title || '').trim();
     const detailText = String(detail || '').trim();
+    const copy = document.createElement('div');
+    copy.className = 'sv-toast-copy';
     const titleElement = document.createElement('div');
     titleElement.className = 'sv-toast-title';
     titleElement.setAttribute('data-i18n-raw', '');
     titleElement.textContent = titleText || detailText || tr('操作完成');
-    ui.toast.appendChild(titleElement);
+    copy.appendChild(titleElement);
     if (titleText && detailText) {
       const detailElement = document.createElement('div');
       detailElement.className = 'sv-toast-detail';
       detailElement.setAttribute('data-i18n-raw', '');
       detailElement.textContent = detailText;
-      ui.toast.appendChild(detailElement);
+      copy.appendChild(detailElement);
     }
+    const track = document.createElement('div');
+    track.className = 'sv-toast-track';
+    const bar = document.createElement('span');
+    bar.className = 'sv-toast-bar';
+    bar.style.width = '100%';
+    track.appendChild(bar);
+    ui.toast.append(copy, track);
+    requestAnimationFrame(() => {
+      bar.style.transition = 'width 2800ms linear';
+      bar.style.width = '0%';
+    });
     ui.toast.setAttribute('role', 'status');
     ui.toast.setAttribute('aria-live', 'polite');
     ui.toast.setAttribute('aria-atomic', 'true');
@@ -1645,6 +1878,17 @@
       ? state.settings.material
       : 'solid';
     rootHost.dataset.material = material;
+    rootHost.dataset.accent = ['indigo', 'ocean', 'emerald', 'rose', 'amber', 'violet'].includes(
+      state.settings.accentColor,
+    )
+      ? state.settings.accentColor
+      : 'indigo';
+    rootHost.dataset.glass = ['soft', 'strong', 'ultra'].includes(state.settings.glassStrength)
+      ? state.settings.glassStrength
+      : 'strong';
+    rootHost.dataset.radius = ['soft', 'round', 'square'].includes(state.settings.uiRadius)
+      ? state.settings.uiRadius
+      : 'soft';
   }
 
   function hideBanner() {
@@ -1671,7 +1915,7 @@
       ui.bannerTitle.textContent = username;
       ui.bannerLogo.textContent = username.trim().charAt(0).toUpperCase() || 'S';
       const pieces = [pending.host];
-      if (pending.createdAt) pieces.push(`记录于 ${formatTime(pending.createdAt)}`);
+      if (pending.createdAt) pieces.push(`${tr('记录于')} ${formatTime(pending.createdAt)}`);
       ui.bannerSub.textContent = pieces.filter(Boolean).join(' · ');
       ui.save.textContent = pending.existing ? '更新账号' : '保存账号';
       ui.save.hidden = false;
@@ -1694,12 +1938,12 @@
     applyBannerPosition();
     state.lockedHintShown = true;
     state.banner = { mode: 'locked' };
-    ui.bannerKicker.textContent = initialized ? '密码库已锁定' : '还没有密码库';
-    ui.bannerTitle.textContent = state.host || '当前网站';
+    ui.bannerKicker.textContent = initialized ? tr('密码库已锁定') : tr('还没有密码库');
+    ui.bannerTitle.textContent = state.host || tr('当前网站');
     ui.bannerLogo.textContent = (state.host || 'S').trim().charAt(0).toUpperCase() || 'S';
     ui.bannerSub.textContent = initialized
-      ? `本次登录信息未保存。解锁后即可使用 SubVault 管理 ${state.host} 的密码。`
-      : '创建本地加密密码库后，登录信息才会被安全保存。';
+      ? tr('本次登录信息未保存。解锁后即可使用 SubVault 管理该站点的密码。')
+      : tr('创建本地加密密码库后，登录信息才会被安全保存。');
     ui.save.hidden = true;
     ui.dismiss.hidden = true;
     ui.ignore.hidden = true;
@@ -1918,6 +2162,92 @@
     }
     showToast('已复制别名邮箱', text);
     hideAliasPanel();
+  }
+
+
+  let siteOtpTick = 0;
+  let siteOtpDeadline = 0;
+  let siteOtpTotal = 5000;
+  let siteOtpCodeExpiry = 0;
+
+  function hideSiteOtp() {
+    clearInterval(siteOtpTick);
+    siteOtpTick = 0;
+    if (ui?.otp) ui.otp.hidden = true;
+  }
+
+  function updateSiteOtpTick() {
+    if (!ui?.otp || ui.otp.hidden) return;
+    const left = Math.max(0, siteOtpDeadline - Date.now());
+    if (ui.otpBar) ui.otpBar.style.width = `${siteOtpTotal ? (left / siteOtpTotal) * 100 : 0}%`;
+    if (left <= 0) hideSiteOtp();
+  }
+
+  async function refreshSiteOtpCode() {
+    if (state.locked || !isTopFrame) return;
+    state.otpEntryId = '';
+    const result = await send('SV_GET_SITE_TOTP');
+    if (!result.ok) {
+      hideSiteOtp();
+      return;
+    }
+    state.otpEntryId = result.id || '';
+    state.otpRemaining = Number(result.remaining) || 0;
+    state.otpPeriod = Number(result.period) || 30;
+    siteOtpCodeExpiry = Date.now() + state.otpRemaining * 1000;
+    if (ui.otpCode) ui.otpCode.textContent = result.code;
+    if (ui.otpSub) {
+      ui.otpSub.textContent = `${result.username || tr('当前账号')} · ${result.remaining} ${tr('秒后刷新')}`;
+    }
+  }
+
+  async function showSiteOtp(field = null) {
+    if (state.locked || !isTopFrame || !ui?.otp) return;
+    if (field) state.otpField = field;
+    await refreshSiteOtpCode();
+    if (!state.otpEntryId) return;
+    const seconds = Math.max(1, Math.min(60, Number(state.settings.otpToastSeconds) || 5));
+    siteOtpTotal = seconds * 1000;
+    siteOtpDeadline = Date.now() + siteOtpTotal;
+    if (ui.otpBar) ui.otpBar.style.width = '100%';
+    ui.otp.hidden = false;
+    clearInterval(siteOtpTick);
+    siteOtpTick = setInterval(() => {
+      if (Date.now() >= siteOtpCodeExpiry) void refreshSiteOtpCode();
+      updateSiteOtpTick();
+    }, 200);
+    updateSiteOtpTick();
+  }
+
+  async function copySiteOtp() {
+    const code = ui?.otpCode?.textContent || '';
+    if (!code || code === '------') return;
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch {
+      const helper = document.createElement('textarea');
+      helper.value = code;
+      helper.style.cssText = 'position:fixed;opacity:0;pointer-events:none;';
+      document.documentElement.appendChild(helper);
+      helper.select();
+      document.execCommand('copy');
+      helper.remove();
+    }
+    showToast('动态码已复制', code);
+  }
+
+  function fillSiteOtp() {
+    const code = ui?.otpCode?.textContent || '';
+    const field = state.otpField;
+    if (!code || code === '------') return;
+    if (!(field instanceof HTMLInputElement) || !field.isConnected) {
+      showToast('请先点击页面上的验证码输入框');
+      return;
+    }
+    setNativeValue(field, code);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    showToast('已填入动态验证码', code);
   }
 
   async function generateForSignup() {
@@ -2158,6 +2488,13 @@
     if (event.composedPath().includes(rootHost)) return;
 
     const target = eventInput(event);
+    if (target && looksLikeOtp(target)) {
+      hidePanel();
+      hideTrigger();
+      hideGenChip();
+      void showSiteOtp(target);
+      return;
+    }
     if (target && isPasswordInput(target) && isSignupPasswordField(target)) {
       hidePanel();
       showGenChip(target);
@@ -2268,6 +2605,34 @@
     openPanel(state.activePassword);
   }
 
+  async function handleGenerateShortcut() {
+    if (!ensureUi()) return;
+    const options = state.settings?.generatorOptions || {};
+    try {
+      const result = await send('SV_GENERATE_PASSWORD', { options });
+      const password = result?.password || '';
+      if (!password) {
+        showToast('无法生成密码');
+        return;
+      }
+      const target = document.activeElement;
+      const editable =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement;
+      if (editable && !target.disabled && !target.readOnly) {
+        target.value = password;
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        target.dispatchEvent(new Event('change', { bubbles: true }));
+        showToast('已生成并填入随机密码');
+        return;
+      }
+      await navigator.clipboard.writeText(password).catch(() => {});
+      showToast('已生成随机密码并复制');
+    } catch {
+      showToast('无法生成密码');
+    }
+  }
+
   /* ------------------------------------------------------------------ */
   /* Lifecycle                                                           */
   /* ------------------------------------------------------------------ */
@@ -2356,6 +2721,11 @@
     }
     if (message.type === 'SV_FILL_SHORTCUT') {
       void handleShortcut();
+      sendResponse({ ok: true });
+      return undefined;
+    }
+    if (message.type === 'SV_GENERATE_SHORTCUT') {
+      void handleGenerateShortcut();
       sendResponse({ ok: true });
       return undefined;
     }

@@ -363,7 +363,12 @@ export function passwordStrength(password) {
 }
 
 export async function sha256Hex(value) {
-  const data = new TextEncoder().encode(String(value ?? ''));
+  const data =
+    value instanceof Uint8Array
+      ? value
+      : value instanceof ArrayBuffer
+        ? new Uint8Array(value)
+        : new TextEncoder().encode(String(value ?? ''));
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
   let out = '';
   for (const byte of digest) out += byte.toString(16).padStart(2, '0');

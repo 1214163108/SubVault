@@ -2,18 +2,21 @@
   "manifest_version": 3,
   "name": "__MSG_extName__",
   "short_name": "SubVault",
-  "version": "2.3.1",
+  "version": "2.6.5",
   "description": "__MSG_extDesc__",
   "default_locale": "zh_CN",
   "minimum_chrome_version": "111",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "alarms",
     "activeTab",
     "privacy",
     "idle",
     "nativeMessaging",
-    "clipboardWrite"
+    "clipboardWrite",
+    "contextMenus",
+    "favicon"
   ],
   "optional_permissions": [
     "clipboardRead"
@@ -63,6 +66,20 @@
         "mac": "Command+Shift+L"
       },
       "description": "用当前网站保存的账号填充登录表单"
+    },
+    "lock-vault": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
+      },
+      "description": "立即锁定 SubVault"
+    },
+    "open-popup": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "打开 SubVault 账号面板"
     }
   },
   "icons": {

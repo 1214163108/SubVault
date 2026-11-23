@@ -31,7 +31,13 @@ verify that the extension does what it says and nothing else.
     no plaintext passwords;
   - `src/vendor/kdbxweb.min.js` + `src/vendor/kdbxweb-shim.js` (kdbxweb 2.x,
     MIT), local KeePass `.kdbx` parsing/writing (KDBX 3/4, optional key file, groups/tags/custom fields/history). Argon2 is provided by the
-    already-bundled hash-wasm module; no file leaves the device.
+    already-bundled hash-wasm module; no file leaves the device;
+  - `src/vendor/jsqr.min.js` (jsQR 1.4.0, Apache-2.0, license text in
+    `src/vendor/jsqr.LICENSE.txt`), offline QR decoding for the TOTP
+    "import from image" button. It only runs on a local `canvas` created
+    from a user-selected image file, contains no `eval`, and performs no
+    network access; Chrome's built-in `BarcodeDetector` is used when it
+    exists.
 - The optional Native Messaging host is a separate local executable; it opens
   no sockets and only talks to the extension over stdin/stdout. Users who do
   not need same-machine cross-browser sync never install it.
@@ -45,7 +51,7 @@ verify that the extension does what it says and nothing else.
 | `chrome.storage.local` (vault index) | vault ids, display names, created time, key-file flag; no credentials | until uninstall / wipe |
 | `chrome.storage.local` (plaintext metadata) | active section, sync trigger/interval/schedule, last sync time/direction/revision/error, travel-mode alarm time; no credentials or account data | until uninstall / wipe |
 | `chrome.storage.session` | derived AES key (JWK) and pending-save candidates | cleared when the browser closes or the vault locks |
-| Downloads (user action) | plaintext CSV export, encrypted backup, or encrypted `.svshare` package with its own password | user-managed |
+| Downloads (user action) | plaintext CSV export, `.svbak` private container holding an encrypted backup / sync snapshot / recovery note, encrypted `.svshare` package with its own password, and an optional 40-byte `.svkey` second factor (no secrets, KDF input only) | user-managed |
 
 The master password is never stored. The content script never receives the
 vault: it asks the background for matches for the current host and gets at most
@@ -59,6 +65,11 @@ a handful of account records.
   (310,000 iterations) + AES-256-GCM under a separate share password. The
   expiry timestamp is inside the ciphertext and is enforced by both sides; a
   downloaded file cannot be remotely revoked.
+- Encrypted backups, sync snapshots and the recovery note are packaged in the
+  `.svbak` binary container (`SVBAK` magic + version + gzip flag + gzipped
+  JSON). The container only wraps already-encrypted data or non-secret
+  recovery instructions; it is not an obfuscation layer for plaintext
+  credentials. Interoperable formats (CSV, `.kdbx`) stay unchanged.
 - Passkey support stores credential id, RP id, account and note as encrypted
   vault metadata; no Passkey private key is imported or used.
 - The bundled Companion (`companion/index.html`) is a static local page with inline script only: no network calls, no analytics, no storage. It decrypts `.svshare` packages with the share password in memory.
@@ -116,12 +127,15 @@ a handful of account records.
 | Permission | Justification |
 | --- | --- |
 | `storage` | Persist the encrypted vault and settings. |
+| `unlimitedStorage` | Avoid browser quota errors for large vaults/attachments; UI still shows a 50 MB budget. |
 | `alarms` | Schedule the precise auto-lock wake-up. |
 | `idle` | Optional: lock on system lock / system idle (off by default). |
 | `activeTab` | Know which tab the popup is acting on. |
 | `privacy` | Optional: turn off Chrome's own "save password" prompt after explicit user opt-in. |
 | `nativeMessaging` | Optional: local sync host, no network. |
 | `clipboardWrite` | Copy password / TOTP code on user action. |
+| `contextMenus` | Optional right-click entries: fill this page, generate a password, open the panel. |
+| `favicon` | Show the site icon next to each saved account in the list. |
 | `clipboardRead` (optional) | User-granted: verify clipboard content before auto-clearing it. |
 | `http://*/*`, `https://*/*` | Show the fill button next to login fields on the current page. |
 
@@ -147,7 +161,7 @@ SubVault therefore does the maximum the platform allows: it marks fields with
   The protocol and state format are identical to the Windows host.
 - Allowed origin is restricted to `chrome-extension://domeipmeogohlofgahadfifjecafipeb/`.
 - It stores only the encrypted vault blob and a revision counter in
-  `data\state.json` for the default vault and `data\vault-<id>.json` for each additional vault (exe-adjacent, fallback `%LOCALAPPDATA%\SubVaultSync`). Optional DPAPI device bindings are stored beside them as `device.json` / `device-<id>.json`; they contain a `ProtectedData` blob, not a plaintext VaultKey.
+  `state.json` for the default vault and `vault-<id>.json` for each additional vault, in a fixed per-user folder (`%LOCALAPPDATA%\SubVaultSync` on Windows; `~/Library/Application Support/SubVaultSync` or `${XDG_CONFIG_HOME:-~/.config}/SubVaultSync` elsewhere). Older builds kept them in a `data` folder beside the executable; those files are copied into the fixed folder on first start, and the exe-adjacent location is only used when the per-user folder is not writable. Optional DPAPI device bindings are stored beside them as `device.json` / `device-<id>.json`; they contain a `ProtectedData` blob, not a plaintext VaultKey.
 - Optional WebDAV is an independent encrypted backup/restore target, not a
   real-time sync transport. The host performs `GET`/`PUT`/`MKCOL` against
   `<base>/subvault/state.json` for the default vault and
@@ -206,3 +220,10 @@ with a local build to confirm the store upload matches this source.
 Automated checks used by the project: 58 Node unit/backend tests plus Playwright
 Chromium E2E scripts under `tools/` (`test-v141-e2e.mjs`, `test-popover-e2e.mjs`,
 `test-save-prompt-e2e.mjs`, `test-sync-e2e.mjs`, ...).
+
+## 回收站与动态码
+
+- 删除条目先写入加密 vault 的 `trash`（最多 100 条），可恢复或清空；不写外部日志。
+- 动态码提示由本地 TOTP 计算，经扩展消息传给内容脚本，无网络请求。
+- `unlimitedStorage` 仅用于大密码库；UI 预算显示 50 MB。
+- WebDAV 首次备份自动 `MKCOL` 固定子目录，修复 `409 AncestorsNotFound`。

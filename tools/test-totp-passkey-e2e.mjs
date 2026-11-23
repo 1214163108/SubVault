@@ -61,8 +61,7 @@ await options.waitForSelector('.entry-card', { state: 'visible' });
 await options.click('[data-section="vault"]');
 await options.waitForSelector('.entry-card');
 
-const edit = options.locator('.entry-actions button', { hasText: '编辑' }).first();
-await edit.click();
+await options.locator('.entry-actions button', { hasText: '编辑' }).first().click();
 await options.waitForSelector('#entryDialog[open]');
 checks.passkeyDialog = {
   credentialId: await options.inputValue('#entryPasskeyCredential'),
@@ -74,7 +73,7 @@ await options.click('#entryDialog button[value="cancel"], #entryCancel').catch(a
   await options.keyboard.press('Escape');
 });
 
-const totpButton = options.locator('.entry-actions button', { hasText: '动态码' }).first();
+const totpButton = options.locator('.entry-card .entry-totp').first();
 await totpButton.click();
 await options.waitForSelector('#totpDialog[open]');
 checks.optionsTotp = {
@@ -109,12 +108,17 @@ for (let i = 0; i < 50 && !popup; i += 1) {
 if (!popup) throw new Error('popup tab did not open');
 popup.on('pageerror', (error) => errors.push(String(error)));
 await popup.waitForSelector('#vaultView', { state: 'visible' });
-await popup.locator('button[title="动态验证码"]').first().click();
-await popup.waitForSelector('#totpDialog[open]');
+await popup.waitForSelector('.entry-otp strong', { timeout: 15000 });
+let popupCode = '';
+for (let i = 0; i < 60 && !/^\d{6}$/.test(popupCode); i += 1) {
+  popupCode = (await popup.textContent('.entry-otp strong')) || '';
+  if (!/^\d{6}$/.test(popupCode)) await new Promise((resolve) => setTimeout(resolve, 250));
+}
 checks.popupTotp = {
-  code: await popup.textContent('#totpCode'),
-  width: await popup.evaluate(() => document.querySelector('#totpProgressBar')?.style.width || ''),
+  code: popupCode,
+  meta: await popup.textContent('.entry-otp span'),
 };
+await popup.click('.entry-otp-copy');
 
 checks.pass = Boolean(
   checks.passkeyDialog.credentialId === 'credential-otp-1'
@@ -128,7 +132,7 @@ checks.pass = Boolean(
   && checks.backupGenerated.type === 'text'
   && checks.backupGenerated.expiryOptions >= 2
   && /^\d{6}$/.test(checks.popupTotp.code.trim())
-  && checks.popupTotp.width !== ''
+  && checks.popupTotp.meta.trim() !== ''
   && errors.length === 0,
 );
 checks.errors = errors;

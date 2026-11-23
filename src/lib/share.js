@@ -6,6 +6,7 @@ import {
   deriveKeyFromKdf,
   encryptJSON,
 } from './crypto.js';
+import { foldKeyFile, keyFileFingerprint } from './keyfile.js';
 
 export const SHARE_FORMAT = 'subvault-share';
 export const SHARE_VERSION = 2;
@@ -50,6 +51,7 @@ export function shareableEntry(entry) {
 export async function createSharePackage(entries, options = {}) {
   const password = String(options.password || '');
   if (password.length < 8) throw new Error('分享密码至少需要 8 个字符');
+  const keyFileBase64 = String(options.keyFileBase64 || '');
   const list = (Array.isArray(entries) ? entries : []).map(shareableEntry).filter(
     (entry) => entry.host && entry.password,
   );
@@ -59,7 +61,7 @@ export async function createSharePackage(entries, options = {}) {
   if (expiresAt <= createdAt) throw new Error('分享有效期无效');
   const rawKdf = createKdfParams();
   const kdf = await bindKdfToExpiry(rawKdf, expiresAt);
-  const key = await deriveKeyFromKdf(password, kdf);
+  const key = await deriveKeyFromKdf(await foldKeyFile(password, keyFileBase64), kdf);
   const box = await encryptJSON(
     key,
     {
@@ -76,13 +78,16 @@ export async function createSharePackage(entries, options = {}) {
     version: SHARE_VERSION,
     createdAt,
     expiresAt,
+    ...(keyFileBase64
+      ? { keyFile: true, keyFileFingerprint: await keyFileFingerprint(keyFileBase64) }
+      : {}),
     kdf: rawKdf,
     box,
   };
 }
 
 /** Decrypt and validate a .svshare package. Throws on wrong password/expiry. */
-export async function openSharePackage(pkg, password) {
+export async function openSharePackage(pkg, password, keyFileBase64 = '') {
   const version = Number(pkg?.version);
   if (!pkg || pkg.format !== SHARE_FORMAT || (version !== 1 && version !== 2)) {
     throw new Error('不是有效的 SubVault 分享文件');
@@ -91,8 +96,17 @@ export async function openSharePackage(pkg, password) {
   if (expiresAt && Date.now() > expiresAt) {
     throw new Error('分享文件已过期，无法解密');
   }
+  if (pkg.keyFile && !keyFileBase64) {
+    throw new Error('该分享文件需要配套的密钥文件才能解密');
+  }
+  if (pkg.keyFile && pkg.keyFileFingerprint) {
+    const actual = await keyFileFingerprint(keyFileBase64);
+    if (actual !== String(pkg.keyFileFingerprint)) {
+      throw new Error('密钥文件与该分享文件不匹配');
+    }
+  }
   const kdf = version >= 2 ? await bindKdfToExpiry(pkg.kdf, expiresAt) : pkg.kdf;
-  const key = await deriveKeyFromKdf(String(password || ''), kdf);
+  const key = await deriveKeyFromKdf(await foldKeyFile(String(password || ''), keyFileBase64), kdf);
   let payload;
   try {
     payload = await decryptJSON(key, pkg.box, shareAad(version, expiresAt));

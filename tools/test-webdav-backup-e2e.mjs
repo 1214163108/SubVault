@@ -5,6 +5,10 @@ import { Buffer } from 'node:buffer';
 import { chromium } from 'playwright';
 
 const root = path.resolve(import.meta.dirname, '..');
+// Keep the native host away from the real per-user vault during tests.
+const syncDir = path.join(path.resolve(import.meta.dirname, '..'), '.tmp-host', 'test-webdav-backup-e2e-data');
+fs.rmSync(syncDir, { recursive: true, force: true });
+fs.mkdirSync(syncDir, { recursive: true });
 const base = path.join(root, '.tmp-webdav-backup', String(Date.now()));
 const password = 'SubVault-Test-2026!Qm7#';
 const davUser = 'alice';
@@ -18,11 +22,24 @@ let body = Buffer.alloc(0);
 let etag = '"v0"';
 let counter = 0;
 const requests = [];
+const archives = new Map();
 const server = http.createServer((req, res) => {
   requests.push(`${req.method} ${req.url}`);
   const auth = req.headers.authorization || '';
   const expected = `Basic ${Buffer.from(`${davUser}:${davPass}`).toString('base64')}`;
   if (auth !== expected) { res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="subvault"' }); res.end(); return; }
+  const archiveMatch = /^\/dav\/subvault\/([^/]+\.json)$/.exec(req.url);
+  if (archiveMatch && archiveMatch[1] !== 'state.json') {
+    if (req.method !== 'PUT') { res.writeHead(405); res.end(); return; }
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      if (req.headers['if-none-match'] === '*' && archives.has(archiveMatch[1])) { res.writeHead(412); res.end(); return; }
+      archives.set(archiveMatch[1], Buffer.concat(chunks));
+      res.writeHead(201); res.end();
+    });
+    return;
+  }
   if (req.url !== '/dav/subvault/state.json' && req.url !== '/dav/subvault') { res.writeHead(404); res.end(); return; }
   if (req.method === 'MKCOL') { collection = true; res.writeHead(201); res.end(); return; }
   if (!collection) { res.writeHead(req.method === 'GET' ? 404 : 409); res.end(); return; }
@@ -51,6 +68,7 @@ const errors = [];
 async function openExtension(profile) {
   const context = await chromium.launchPersistentContext(profile, {
     headless: false,
+  env: { ...process.env, SUBVAULT_SYNC_DIR: syncDir },
     args: [
       `--disable-extensions-except=${root}`,
       `--load-extension=${root}`,
@@ -90,6 +108,10 @@ try {
     entry: { host: 'example.com', username: 'alice', password: 'alice-secret' },
   });
   results.backup = await send(app.page, 'SV_WEBDAV_BACKUP_NOW');
+  results.backupName = results.backup?.name;
+  results.archiveFiles = [...archives.keys()];
+  results.archiveMatched = Boolean(results.backupName && archives.has(results.backupName));
+  results.archiveError = results.backup?.archiveError;
   results.exists = exists;
   results.revision = counter;
   const envelope = JSON.parse(body.toString('utf8'));
@@ -130,6 +152,7 @@ try {
   const after = await send(app.page, 'SV_LIST_ENTRIES');
   results.afterRestore = after.entries?.map((entry) => entry.username).sort();
   results.backupStatus = await send(app.page, 'SV_WEBDAV_BACKUP_STATUS');
+  results.statusName = results.backupStatus?.lastName;
   results.requests = requests;
   results.pass = Boolean(
     results.setConfig?.ok
@@ -137,6 +160,10 @@ try {
     && results.exists
     && results.revision >= 1
     && results.envelopeVault
+    && /^subvault-\d{8}-\d{6}\.json$/.test(results.backupName || '')
+    && results.archiveMatched
+    && results.archiveError === ''
+    && results.statusName === results.backupName
     && results.beforeRestore?.includes('alice')
     && results.beforeRestore?.includes('bob')
     && results.ui?.transportSelect === false

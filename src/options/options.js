@@ -2,7 +2,9 @@ import {
   clearClipboard,
   clipboardMessage,
   copyText,
+  downloadBytes,
   downloadText,
+  faviconUrl,
   formatDateTime,
   formatRelative,
   isLockedError,
@@ -10,6 +12,13 @@ import {
   readFileBase64,
   send,
 } from '../lib/client.js';
+import { CONTAINER_EXTENSION, packContainer, unpackContainer } from '../lib/container.js';
+import {
+  KEY_FILE_EXTENSION,
+  createKeyFile,
+  describeKeyFile,
+  keyFileLabel,
+} from '../lib/keyfile.js';
 import {
   isHostIsolated,
   isValidHost,
@@ -20,7 +29,7 @@ import {
   suggestBaseDomain,
 } from '../lib/domain.js';
 import { generatePassword, generatePin } from '../lib/generator.js';
-import { passwordStrength } from '../lib/crypto.js';
+import { base64ToBytes, passwordStrength, sha256Hex } from '../lib/crypto.js';
 import { evaluateMasterPassword } from '../lib/strength.js';
 import { parseOtpAuthUri } from '../lib/totp.js';
 import { parseImportFile } from '../lib/importers.js';
@@ -66,6 +75,10 @@ const state = {
   shareSelected: new Set(),
   shareReady: false,
   shareFilter: '',
+  hostFilter: '',
+  tagFilter: '',
+  trash: [],
+  trashLoaded: false,
   travel: null,
   travelEntries: [],
   travelHidden: new Set(),
@@ -94,12 +107,14 @@ const state = {
   sort: 'host',
   limit: 200,
   editingId: null,
-  backupText: '',
+  backupBase64: '',
   backupName: '',
   pendingImport: null,
   entryTotpMeta: null,
   dangerMode: '',
   revealTimers: new Map(),
+  rowOtps: new Map(),
+  rowOtpTimer: 0,
   sync: null,
   syncConfig: null,
   snapshot: null,
@@ -246,6 +261,9 @@ function showGate(mode = 'unlock') {
   if ($('dangerDialog').open) $('dangerDialog').close();
   for (const timer of state.revealTimers.values()) clearTimeout(timer);
   state.revealTimers.clear();
+  clearInterval(state.rowOtpTimer);
+  state.rowOtpTimer = 0;
+  state.rowOtps.clear();
   state.entries = [];
   state.stats = null;
   $('vaultList').replaceChildren();
@@ -263,6 +281,8 @@ function showGate(mode = 'unlock') {
   $('gateSetupForm').hidden = true;
   $('gateImportPrompt').hidden = true;
   $('gateImportForm').hidden = true;
+  if ($('gateWebdavForm')) $('gateWebdavForm').hidden = true;
+  if ($('gateWebdavOpen')) $('gateWebdavOpen').hidden = true;
   setError($('gateError'), '');
   $('gatePassword').value = '';
   $('gateImportPassword').value = '';
@@ -311,6 +331,7 @@ async function detectGateImport() {
     $('gateSub').textContent = '选择导入已有密码库，或创建全新的本地密码库。';
     $('gateImportPrompt').hidden = false;
     $('gateSetupForm').hidden = true;
+    if ($('gateWebdavOpen')) $('gateWebdavOpen').hidden = false;
     $('gateImportChoose').focus();
     return;
   }
@@ -318,7 +339,58 @@ async function detectGateImport() {
   $('gateSub').textContent = '设置一个主密码。它只在本机用于加密，忘记后无法找回。';
   $('gateImportPrompt').hidden = true;
   $('gateSetupForm').hidden = false;
+  if ($('gateWebdavOpen')) $('gateWebdavOpen').hidden = false;
   $('gateNewPassword').focus();
+}
+
+async function restoreFromWebdavOnGate() {
+  const url = $('gateWebdavUrl').value.trim();
+  const master = $('gateWebdavMaster').value;
+  if (!url) {
+    setError($('gateError'), '请填写 WebDAV 地址');
+    return;
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    setError($('gateError'), 'WebDAV 地址格式不正确');
+    return;
+  }
+  const loopback = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    setError($('gateError'), 'WebDAV 地址必须使用 HTTPS（本机测试可用 http://127.0.0.1）');
+    return;
+  }
+  if (!master) {
+    setError($('gateError'), '请输入该备份的主密码');
+    return;
+  }
+  const button = $('gateWebdavBtn');
+  setBusy(button, true, '正在恢复…');
+  const file = $('gateWebdavKeyFile')?.files?.[0];
+  const keyFileBase64 = file ? await readFileBase64(file) : '';
+  const result = await send('SV_SYNC_IMPORT', {
+    webdav: {
+      url,
+      username: $('gateWebdavUsername').value.trim(),
+      password: $('gateWebdavPassword').value,
+    },
+    password: master,
+    keyFileBase64,
+  });
+  setBusy(button, false);
+  if (!result.ok) {
+    setError($('gateError'), result.error || '从 WebDAV 恢复失败');
+    return;
+  }
+  await setSyncPromptDismissed(false);
+  $('gateWebdavMaster').value = '';
+  $('gateWebdavPassword').value = '';
+  $('gateWebdavForm').hidden = true;
+  hideGate();
+  await loadAll();
+  toast(`已从 WebDAV 恢复 ${result.count} 个账号并解锁`);
 }
 
 function setSyncPromptDismissed(value) {
@@ -344,8 +416,16 @@ function handleError(result, fallback = '操作失败') {
   return true;
 }
 
+let settingsEpoch = 0;
+
 async function loadSettings() {
+  const epoch = settingsEpoch;
   const result = await send('SV_GET_SETTINGS');
+  if (epoch !== settingsEpoch) {
+    // A newer change already arrived and was applied; keep it.
+    applySettings();
+    return;
+  }
   if (result.ok && result.settings) {
     state.settings = {
       ...state.settings,
@@ -384,6 +464,7 @@ const SYNC_STATE_TEXT = {
   idle: '已同步',
   syncing: '同步中',
   conflict: '需要处理',
+  identity_mismatch: '密码库不一致',
   unavailable: '宿主未连接',
   unconfigured: '未配置 WebDAV',
   not_joined: '未加入同步',
@@ -416,6 +497,9 @@ function renderSyncCenter(sync = state.sync) {
   } else if (name === 'conflict') {
     box.classList.add('warn');
     box.textContent = '远端和本机都有新的修改，请在下方选择保留哪个版本。';
+  } else if (name === 'identity_mismatch') {
+    box.classList.add('warn');
+    box.textContent = '远端密码库与当前密码库不是同一个，同步已暂停。请先导出备份，再决定保留哪一份；需要换用远端密码库时，在另一台浏览器上导出后再导入。';
   } else if (name === 'unconfigured') {
     box.classList.add('warn');
     box.textContent = '尚未配置 WebDAV。请填写地址、用户名和密码后保存，再点击“立即同步”。';
@@ -569,7 +653,8 @@ function renderWebdavBackupStatus(status = state.webdavBackup) {
   } else {
     const at = status?.lastBackupAt ? formatSyncTime(status.lastBackupAt) : '从未';
     const revision = status?.lastRevision ? ` · 远端 #${status.lastRevision}` : '';
-    meta.textContent = `上次备份：${at}${revision}`;
+    const name = status?.lastName ? ` · ${status.lastName}` : '';
+    meta.textContent = `上次备份：${at}${name}${revision}`;
   }
   if (status?.lastError) {
     $('webdavError').textContent = status.lastError;
@@ -577,6 +662,115 @@ function renderWebdavBackupStatus(status = state.webdavBackup) {
   } else if ($('webdavError')) {
     $('webdavError').hidden = true;
   }
+  renderWebdavAutoBackup(status);
+}
+
+function renderWebdavAutoBackup(status = state.webdavBackup) {
+  if (!$('webdavAutoBackup')) return;
+  const s = status || {};
+  const enabled = Boolean(s.autoBackup);
+  const toggle = $('webdavAutoBackup');
+  if (document.activeElement !== toggle) toggle.checked = enabled;
+  for (const [id, value] of [
+    ['webdavAutoBackupHours', s.autoBackupHours ?? 24],
+    ['webdavKeepCopies', s.keepCopies ?? 10],
+    ['webdavArchiveDays', s.archiveDays ?? 0],
+  ]) {
+    const input = $(id);
+    if (input && document.activeElement !== input) input.value = String(value);
+  }
+  const meta = $('webdavAutoMeta');
+  if (!meta) return;
+  if (!s.configured) {
+    meta.textContent = '配置 WebDAV 后可开启自动备份。';
+  } else if (!enabled) {
+    meta.textContent = '自动备份已关闭。';
+  } else if (s.nextAutoBackupAt) {
+    meta.textContent = `下次自动备份：${formatSyncTime(s.nextAutoBackupAt)}`;
+  } else {
+    meta.textContent = '保存配置后会在解锁状态下按间隔自动备份。';
+  }
+}
+
+function renderWebdavHistory(result) {
+  const list = $('webdavHistoryList');
+  if (!list) return;
+  const archives = Array.isArray(result?.archives) ? result.archives : [];
+  list.replaceChildren();
+  if (!archives.length) {
+    list.hidden = false;
+    const empty = document.createElement('div');
+    empty.className = 'hint';
+    empty.textContent = '远端还没有历史副本。';
+    list.append(empty);
+    return;
+  }
+  archives.forEach((archive, index) => {
+    const row = document.createElement('div');
+    row.className = `archive-row${index === 0 ? ' is-newest' : ''}`;
+    const name = document.createElement('span');
+    name.className = 'archive-name';
+    name.textContent = archive.name || '未知文件';
+    name.title = archive.name || '';
+    const meta = document.createElement('span');
+    meta.className = 'archive-meta';
+    const size = Number(archive.size) > 0 ? ` · ${formatBytes(Number(archive.size))}` : '';
+    meta.textContent = `${formatSyncTime(archive.modified || 0)}${size}`;
+    row.append(name, meta);
+    list.append(row);
+  });
+  list.hidden = false;
+}
+
+async function loadWebdavHistory() {
+  const button = $('webdavHistoryBtn');
+  setBusy(button, true, '读取中…');
+  const result = await send('SV_WEBDAV_HISTORY');
+  setBusy(button, false);
+  if (!result?.ok) {
+    toast(result?.error || '无法读取历史副本', { error: true });
+    return;
+  }
+  renderWebdavHistory(result);
+  toast(result.count ? `远端有 ${result.count} 份历史副本` : '远端没有历史副本');
+}
+
+async function pruneWebdavHistory() {
+  const keep = Math.max(0, Math.min(200, Math.floor(Number($('webdavKeepCopies')?.value) || 0)));
+  const olderThanDays = Math.max(
+    0,
+    Math.min(3650, Math.floor(Number($('webdavArchiveDays')?.value) || 0)),
+  );
+  if (!keep && !olderThanDays) {
+    toast('保留份数与过期天数都为 0 时不会删除任何副本', { error: true });
+    return;
+  }
+  if (
+    !window.confirm(
+      `按规则清理远端历史副本？保留最近 ${keep} 份${olderThanDays ? `，删除超过 ${olderThanDays} 天的副本` : ''}。此操作不可撤销。`,
+    )
+  ) {
+    return;
+  }
+  const button = $('webdavPruneBtn');
+  setBusy(button, true, '清理中…');
+  const result = await send('SV_WEBDAV_PRUNE', { keep, olderThanDays });
+  setBusy(button, false);
+  if (!result?.ok) {
+    toast(result?.error || '清理历史副本失败', { error: true });
+    return;
+  }
+  toast(
+    `已删除 ${result.deleted.length} 份副本，剩余 ${result.remaining} 份` +
+      (result.failures.length ? `，${result.failures.length} 份失败` : ''),
+    { error: Boolean(result.failures.length) },
+  );
+  await loadWebdavHistory();
+}
+
+async function saveWebdavAutoSettings(patch) {
+  const ok = await saveSettings(patch);
+  if (ok) await refreshWebdavBackupStatus();
 }
 
 async function refreshWebdavBackupStatus() {
@@ -600,7 +794,11 @@ async function backupWebdavNow() {
     toast(error.textContent, { error: true });
     return;
   }
-  toast(`已备份到 WebDAV（远端 #${result.revision || '?'}）`);
+  if (result.archiveError) {
+    toast(`已备份到 WebDAV（远端 #${result.revision || '?'}），但历史副本写入失败`, { error: true });
+  } else {
+    toast(`已备份到 WebDAV：${result.name || '备份文件'}（远端 #${result.revision || '?'}）`);
+  }
   await refreshWebdavBackupStatus();
 }
 
@@ -928,6 +1126,7 @@ async function loadAll() {
   await refreshPslStatus();
   if (state.loadingAll) return;
   state.loadingAll = true;
+  const settingsEpochAtStart = settingsEpoch;
   try {
     const [entriesResult, settingsResult, takeoverResult, usageResult, statusResult, syncResult] =
       await Promise.all([
@@ -947,7 +1146,7 @@ async function loadAll() {
 
     state.entries = Array.isArray(entriesResult.entries) ? entriesResult.entries : [];
     state.stats = entriesResult.stats || null;
-    if (settingsResult.ok && settingsResult.settings) {
+    if (settingsResult.ok && settingsResult.settings && settingsEpochAtStart === settingsEpoch) {
       state.settings = {
         ...state.settings,
         ...settingsResult.settings,
@@ -964,8 +1163,11 @@ async function loadAll() {
     state.locked = false;
     state.initialized = true;
     updateLockUi();
+    startEntryOtpTimer();
     applySettings();
     renderStats();
+    renderVaultInsights();
+    renderVaultFilters();
     renderVault();
     renderDomains();
     renderExceptions();
@@ -977,6 +1179,7 @@ async function loadAll() {
     void refreshMigrationStatus();
     void refreshDeviceBinding();
     renderShareEntries();
+    void refreshTrash();
     if (!state.locked) {
       try {
         await refreshTravel();
@@ -1075,22 +1278,54 @@ async function exportShare() {
     const entries = (secrets.entries || []).filter((entry) => state.shareSelected.has(entry.id));
     if (!entries.length) throw new Error('选中的账号没有可分享的密码');
     const days = Number($('shareExpiry').value) || 1;
+    const withKeyFile = Boolean($('shareExportKeyFile')?.checked);
+    const keyFile = withKeyFile ? createKeyFile() : null;
     const pkg = await createSharePackage(entries, {
       password,
       expiresAt: defaultShareExpiry(days),
+      keyFileBase64: keyFile ? keyFile.base64 : '',
     });
     const stamp = new Date().toISOString().slice(0, 10);
-    downloadText(
+    downloadBytes(
       `subvault-share-${stamp}.svshare`,
-      JSON.stringify(pkg, null, 2),
-      'application/json',
+      await packContainer(pkg),
+      'application/octet-stream',
     );
+    let keyLabelText = '';
+    if (keyFile) {
+      downloadBytes(`subvault-share-${stamp}.${KEY_FILE_EXTENSION}`, keyFile.bytes);
+      keyLabelText = keyFileLabel((await sha256Hex(keyFile.base64)).slice(0, 16));
+    }
     $('sharePassword').value = '';
-    toast(`已导出 ${entries.length} 个账号的分享文件`);
+    if ($('shareExportKeyFile')) $('shareExportKeyFile').checked = false;
+    toast(
+      keyFile
+        ? `已导出 ${entries.length} 个账号和密钥文件 ${keyLabelText}`
+        : `已导出 ${entries.length} 个账号的分享文件`,
+      keyFile ? '接收方必须同时拿到 .svshare 和 .svkey 才能解密。' : '',
+    );
   } catch (error) {
     setError($('shareError'), error?.message || '分享文件生成失败');
   } finally {
     setBusy(button, false);
+  }
+}
+
+async function detectShareKeyFile() {
+  const row = $('shareImportKeyFileRow');
+  if (!row) return;
+  const file = $('shareFile').files?.[0];
+  if (!file) {
+    row.hidden = true;
+    return;
+  }
+  try {
+    const pkg = await unpackContainer(new Uint8Array(await file.arrayBuffer()));
+    const needsKey = Boolean(pkg?.keyFile);
+    row.hidden = !needsKey;
+    if (!needsKey && $('shareImportKeyFile')) $('shareImportKeyFile').value = '';
+  } catch {
+    row.hidden = true;
   }
 }
 
@@ -1110,8 +1345,15 @@ async function importShare() {
   setBusy(button, true, '正在解密…');
   try {
     if (file.size > 10 * 1024 * 1024) throw new Error('分享文件超过 10 MB');
-    const pkg = JSON.parse(await file.text());
-    const opened = await openSharePackage(pkg, password);
+    const pkg = await unpackContainer(new Uint8Array(await file.arrayBuffer()));
+    if ($('shareImportKeyFileRow')) $('shareImportKeyFileRow').hidden = !pkg?.keyFile;
+    let keyFileBase64 = '';
+    if (pkg?.keyFile) {
+      const keyFile = $('shareImportKeyFile')?.files?.[0];
+      if (!keyFile) throw new Error('该分享文件需要配套的密钥文件才能解密');
+      keyFileBase64 = (await describeKeyFile(await readFileBase64(keyFile))).base64;
+    }
+    const opened = await openSharePackage(pkg, password, keyFileBase64);
     const entries = opened.entries;
     const preview = await send('SV_PREVIEW_IMPORT_ROWS', {
       entries,
@@ -1133,6 +1375,8 @@ async function importShare() {
     showImportPreview(preview, file.name);
     $('shareFile').value = '';
     $('shareImportPassword').value = '';
+    if ($('shareImportKeyFile')) $('shareImportKeyFile').value = '';
+    if ($('shareImportKeyFileRow')) $('shareImportKeyFileRow').hidden = true;
     toast(`已解密 ${entries.length} 个账号，请确认导入`);
   } catch (error) {
     setError($('shareError'), error?.message || '分享文件导入失败');
@@ -1473,6 +1717,20 @@ function renderStats() {
   $('statReused').textContent = stats.reused ?? 0;
   $('statOld').textContent = stats.old ?? 0;
   $('statHttp').textContent = stats.http ?? 0;
+  const maxAge = Number(stats.maxAgeDays ?? state.settings?.passwordMaxAgeDays ?? 365);
+  const ageLabel = ageLabelText(maxAge);
+  const statLabel = $('statOldLabel');
+  if (statLabel) statLabel.textContent = ageLabel;
+  const oldOption = $('filterOldOption');
+  if (oldOption) oldOption.textContent = ageLabel;
+}
+
+/** Human label for the password-age threshold; 0 means the reminder is off. */
+function ageLabelText(days) {
+  if (!days || days <= 0) return tr('已关闭');
+  if (days === 365) return tr('超过 1 年');
+  if (days % 365 === 0) return tr('超过 {n} 年').replace('{n}', String(days / 365));
+  return tr('超过 {n} 天').replace('{n}', String(days));
 }
 
 function filteredEntries() {
@@ -1491,6 +1749,11 @@ function filteredEntries() {
     if (state.filter === 'old' && !entry.old) return false;
     if (state.filter === 'http' && !entry.http) return false;
     if (state.filter === 'totp' && !entry.hasTotp) return false;
+    if (state.filter === 'issues' && !(entry.weak || entry.reused || entry.old || entry.http)) {
+      return false;
+    }
+    if (state.hostFilter && entry.host !== state.hostFilter) return false;
+    if (state.tagFilter && !(entry.tags || []).includes(state.tagFilter)) return false;
     return true;
   });
 
@@ -1509,6 +1772,164 @@ function filteredEntries() {
     );
   }
   return list;
+}
+
+function renderVaultInsights() {
+  const entries = state.entries || [];
+  const stats = state.stats || {};
+  const weak = Number(stats.weak ?? entries.filter((entry) => entry.weak).length);
+  const reused = Number(stats.reused ?? entries.filter((entry) => entry.reused).length);
+  const old = Number(stats.old ?? entries.filter((entry) => entry.old).length);
+  const http = Number(stats.http ?? entries.filter((entry) => entry.http).length);
+  const maxAge = Number(stats.maxAgeDays ?? state.settings?.passwordMaxAgeDays ?? 365);
+  const penalty = weak * 9 + reused * 7 + old * 5 + http * 4;
+  const score = Math.max(0, Math.min(100, 100 - penalty));
+  if ($('healthRing')) $('healthRing').style.setProperty('--score', String(score));
+  if ($('healthScore')) $('healthScore').textContent = String(score);
+  if ($('healthHint')) {
+    const issues = [];
+    if (weak) issues.push(tr('{n} 个弱密码').replace('{n}', String(weak)));
+    if (reused) issues.push(tr('{n} 个重复使用').replace('{n}', String(reused)));
+    if (old) issues.push(tr('{n} 个{label}').replace('{n}', String(old)).replace('{label}', ageLabelText(maxAge)));
+    if (http) issues.push(tr('{n} 个 HTTP 明文').replace('{n}', String(http)));
+    $('healthHint').textContent = issues.length
+      ? `${tr('需要处理：')}${issues.join(tr('、'))}${tr('。')}`
+      : tr('未发现明显风险，继续保持。');
+  }
+
+  const counts = new Map();
+  for (const entry of entries) counts.set(entry.host, (counts.get(entry.host) || 0) + 1);
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const chart = $('hostChart');
+  if (!chart) return;
+  chart.replaceChildren();
+  if (!top.length) {
+    chart.appendChild(div('host-chart-empty', tr('还没有账号数据')));
+    return;
+  }
+  const max = top[0][1] || 1;
+  for (const [host, count] of top) {
+    const row = div('host-bar');
+    row.append(span('', host));
+    const track = div('host-track');
+    const fill = div('host-fill');
+    fill.style.width = `${Math.max(6, Math.round((count / max) * 100))}%`;
+    track.appendChild(fill);
+    row.append(track, document.createElement('b'));
+    row.lastChild.textContent = String(count);
+    chart.appendChild(row);
+  }
+}
+
+function renderVaultFilters() {
+  const hostSelect = $('hostFilter');
+  const tagSelect = $('tagFilter');
+  if (!hostSelect || !tagSelect) return;
+  const hosts = [...new Set((state.entries || []).map((entry) => entry.host))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const tags = [
+    ...new Set((state.entries || []).flatMap((entry) => (Array.isArray(entry.tags) ? entry.tags : []))),
+  ].sort((a, b) => a.localeCompare(b));
+  hostSelect.replaceChildren(new Option('全部站点', ''));
+  for (const host of hosts) hostSelect.appendChild(new Option(host, host));
+  tagSelect.replaceChildren(new Option('全部标签', ''));
+  for (const tag of tags) tagSelect.appendChild(new Option(`#${tag}`, tag));
+  hostSelect.value = hosts.includes(state.hostFilter) ? state.hostFilter : '';
+  tagSelect.value = tags.includes(state.tagFilter) ? state.tagFilter : '';
+  state.hostFilter = hostSelect.value;
+  state.tagFilter = tagSelect.value;
+}
+
+let trashUndoTimer = 0;
+
+function hideUndoToast() {
+  clearTimeout(trashUndoTimer);
+  const toastEl = $('undoToast');
+  if (!toastEl) return;
+  toastEl.hidden = true;
+  toastEl.classList.remove('is-running');
+}
+
+function showUndoToast(count, trashIds, onUndone) {
+  const toastEl = $('undoToast');
+  const bar = $('undoToastBar');
+  if (!toastEl || !bar) return;
+  clearTimeout(trashUndoTimer);
+  $('undoToastTitle').textContent = count > 1 ? `已删除 ${count} 个账号` : '已删除账号';
+  $('undoToastDetail').textContent = '已移入回收站，5 秒内可撤销。';
+  toastEl.hidden = false;
+  toastEl.classList.remove('is-running');
+  bar.style.transition = 'none';
+  bar.style.width = '100%';
+  void bar.offsetWidth;
+  bar.style.transition = 'width 5000ms linear';
+  bar.style.width = '0%';
+  toastEl.classList.add('is-running');
+  $('undoToastBtn').onclick = async () => {
+    hideUndoToast();
+    for (const id of trashIds) await send('SV_RESTORE_TRASH', { id });
+    toast('已恢复删除的账号');
+    if (onUndone) await onUndone();
+  };
+  trashUndoTimer = setTimeout(hideUndoToast, 5000);
+}
+
+function renderTrash() {
+  const list = $('trashList');
+  const items = Array.isArray(state.trash) ? state.trash : [];
+  if ($('trashCount')) {
+    $('trashCount').hidden = items.length === 0;
+    $('trashCount').textContent = String(items.length);
+  }
+  if (!list) return;
+  list.replaceChildren();
+  $('trashEmpty').hidden = items.length > 0;
+  if ($('emptyTrashBtn')) $('emptyTrashBtn').hidden = items.length === 0;
+  const retention = Number(state.settings?.trashRetentionDays ?? 30);
+  const retentionText =
+    retention > 0
+      ? tr('超过 {n} 天会自动清除').replace('{n}', String(retention))
+      : tr('永久保留（最多 100 条）');
+  $('trashHint').textContent = items.length
+    ? tr('最近删除 {n} 条，可恢复或清空；{rule}。')
+        .replace('{n}', String(items.length))
+        .replace('{rule}', retentionText)
+    : tr('删除的账号会保留在这里，可随时恢复。');
+  for (const item of items) {
+    const row = div('trash-row');
+    const meta = div('trash-meta');
+    const title = document.createElement('strong');
+    title.textContent = item.title || item.host || '未命名账号';
+    const sub = document.createElement('small');
+    sub.textContent = `${item.host || '无站点'} · ${item.username || '无用户名'} · ${formatDateTime(
+      item.deletedAt,
+    )}`;
+    meta.append(title, sub);
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'btn subtle';
+    restore.textContent = '恢复';
+    restore.addEventListener('click', async () => {
+      const result = await send('SV_RESTORE_TRASH', { id: item.id });
+      if (!result.ok) {
+        handleError(result, '恢复失败');
+        return;
+      }
+      toast('已恢复账号');
+      await loadAll();
+    });
+    row.append(meta, restore);
+    list.appendChild(row);
+  }
+}
+
+async function refreshTrash() {
+  const result = await send('SV_LIST_TRASH');
+  if (!result.ok) return;
+  state.trash = Array.isArray(result.items) ? result.items : [];
+  state.trashLoaded = true;
+  renderTrash();
 }
 
 function renderVault() {
@@ -1536,6 +1957,7 @@ function renderVault() {
   $('loadMoreBtn').hidden = remaining <= 0;
   $('loadMoreBtn').textContent = `显示更多（剩余 ${remaining} 条）`;
   renderBulkBar();
+  void updateEntryOtps(true);
 }
 
 function renderBulkBar() {
@@ -1564,14 +1986,22 @@ async function bulkSetFavorite(favorite) {
 
 async function bulkDelete() {
   if (state.selected.size === 0) return;
-  if (!window.confirm(`确定删除选中的 ${state.selected.size} 个账号吗？`)) return;
+  if (
+    !window.confirm(
+      `将选中的 ${state.selected.size} 个账号移入回收站？删除后 5 秒内可撤销。`,
+    )
+  ) {
+    return;
+  }
   const result = await send('SV_BULK_DELETE', { ids: [...state.selected] });
   if (!result.ok) {
     handleError(result, '批量删除失败');
     return;
   }
-  toast(`已删除 ${result.deleted || 0} 个账号`);
   state.selected.clear();
+  showUndoToast(result.deleted || 0, result.trashIds || [], async () => {
+    await loadAll();
+  });
   await loadAll();
 }
 
@@ -1588,7 +2018,20 @@ function renderEntry(entry) {
     renderBulkBar();
   });
   const avatar = div('entry-avatar');
-  avatar.textContent = (entry.title || entry.host || '?').trim().charAt(0).toUpperCase() || '?';
+  const letter = (entry.title || entry.host || '?').trim().charAt(0).toUpperCase() || '?';
+  avatar.textContent = letter;
+  const icon = faviconUrl(entry.host, 32);
+  if (icon) {
+    const img = document.createElement('img');
+    img.className = 'entry-favicon';
+    img.alt = '';
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('load', () => avatar.classList.add('has-favicon'));
+    img.addEventListener('error', () => img.remove());
+    img.src = icon;
+    avatar.appendChild(img);
+  }
 
   const main = div('entry-main');
   const titleRow = div('entry-title-row');
@@ -1619,10 +2062,27 @@ function renderEntry(entry) {
   );
   main.append(titleRow, sub, meta);
 
+  let totpChip = null;
+  if (entry.hasTotp) {
+    totpChip = document.createElement('button');
+    totpChip.type = 'button';
+    totpChip.className = 'entry-totp';
+    totpChip.title = '查看动态码';
+    totpChip.setAttribute('aria-label', `${entry.title || entry.host} 的动态码`);
+    const codeNode = document.createElement('strong');
+    codeNode.dataset.entryOtpCode = entry.id;
+    codeNode.textContent = '------';
+    const metaNode = span('', '');
+    metaNode.dataset.entryOtpMeta = entry.id;
+    totpChip.append(codeNode, metaNode);
+    totpChip.addEventListener('click', () => void openTotp(entry));
+  }
+
   const actions = div('entry-actions');
-  const favoriteButton = miniButton(entry.favorite ? '★ 收藏' : '☆ 收藏');
-  favoriteButton.classList.add('favorite');
+  const favoriteButton = miniButton(entry.favorite ? '★' : '☆');
+  favoriteButton.classList.add('favorite', 'icon-mini');
   favoriteButton.title = entry.favorite ? '取消收藏' : '收藏账号';
+  favoriteButton.setAttribute('aria-label', favoriteButton.title);
   favoriteButton.addEventListener('click', async () => {
     const result = await send('SV_TOGGLE_FAVORITE', { id: entry.id });
     if (!result.ok) {
@@ -1632,20 +2092,18 @@ function renderEntry(entry) {
     entry.favorite = Boolean(result.favorite);
     renderVault();
   });
-  const revealButton = miniButton('显示');
-  const copyButton = miniButton('复制');
+  const copyButton = miniButton('复制密码', 'primary-mini');
+  const revealButton = miniButton('显示密码');
   const editButton = miniButton('编辑');
   const deleteButton = miniButton('删除', 'danger');
-  const totpButton = entry.hasTotp ? miniButton('动态码') : null;
-  if (totpButton) totpButton.addEventListener('click', () => void openTotp(entry));
-  const historyButton = entry.historyCount ? miniButton('历史') : null;
+  const historyButton = entry.historyCount ? miniButton('密码历史') : null;
   if (historyButton) historyButton.addEventListener('click', () => void openHistory(entry));
+
   actions.append(
     favoriteButton,
-    ...(totpButton ? [totpButton] : []),
+    copyButton,
     ...(historyButton ? [historyButton] : []),
     revealButton,
-    copyButton,
     editButton,
     deleteButton,
   );
@@ -1686,7 +2144,14 @@ function renderEntry(entry) {
   editButton.addEventListener('click', () => void openEntryDialog(entry.id));
   deleteButton.addEventListener('click', () => void deleteEntry(entry));
 
-  card.append(select, avatar, main, actions, secretRow);
+  card.append(
+    select,
+    avatar,
+    main,
+    ...(totpChip ? [totpChip] : []),
+    actions,
+    secretRow,
+  );
   return card;
 }
 
@@ -1719,7 +2184,11 @@ async function copyPassword(id, button) {
 }
 
 async function deleteEntry(entry) {
-  if (!window.confirm(`删除 ${entry.host} 的账号“${entry.username || '无用户名'}”？`)) {
+  if (
+    !window.confirm(
+      `将 ${entry.host} 的账号“${entry.username || '无用户名'}”移入回收站？删除后 5 秒内可撤销。`,
+    )
+  ) {
     return;
   }
   const result = await send('SV_DELETE_ENTRY', { id: entry.id });
@@ -1727,7 +2196,9 @@ async function deleteEntry(entry) {
     handleError(result, '删除失败');
     return;
   }
-  toast('账号已删除');
+  showUndoToast(1, result.trashId ? [result.trashId] : [], async () => {
+    await loadAll();
+  });
   await loadAll();
 }
 
@@ -1735,6 +2206,9 @@ let totpTimer = 0;
 let totpRemaining = 0;
 let totpPeriod = 30;
 let totpId = '';
+let totpKind = 'totp';
+let totpCounter = 0;
+let totpUsername = '';
 
 function updateTotpProgress() {
   const bar = $('totpProgressBar');
@@ -1744,20 +2218,90 @@ function updateTotpProgress() {
   bar.dataset.low = ratio <= 0.2 ? 'true' : 'false';
 }
 
-async function loadTotpCode() {
+function totpMetaText() {
+  const user = totpUsername || '无用户名';
+  if (totpKind === 'hotp') return `${user} · 计数器 #${totpCounter}（点击按钮后 +1）`;
+  if (totpKind === 'steam') return `${user} · Steam Guard · ${totpRemaining} 秒后刷新`;
+  return `${user} · ${totpRemaining} 秒后刷新`;
+}
+
+function applyTotpResult(result) {
+  totpKind = result.type || 'totp';
+  totpUsername = result.username || '';
+  totpCounter = Number(result.counter) || 0;
+  $('totpCode').textContent = result.code;
+  $('totpCode').dataset.kind = totpKind;
+  totpRemaining = Number(result.remaining) || 0;
+  totpPeriod = Number(result.period) || 30;
+  const isHotp = totpKind === 'hotp';
+  $('totpProgress').hidden = isHotp;
+  $('totpNextBtn').hidden = !isHotp;
+  $('totpTitle').textContent = `${$('totpTitle').dataset.entryLabel || '动态码'}${
+    totpKind === 'hotp' ? ' · HOTP' : totpKind === 'steam' ? ' · Steam Guard' : ''
+  }`;
+  updateTotpProgress();
+  $('totpMeta').textContent = totpMetaText();
+}
+
+async function loadTotpCode(options = {}) {
   if (!totpId) return;
-  const result = await send('SV_GET_TOTP_CODE', { id: totpId });
+  const result = await send('SV_GET_TOTP_CODE', {
+    id: totpId,
+    advance: Boolean(options.advance),
+    ...(options.advance ? { counter: totpCounter + 1 } : {}),
+  });
   if (!result.ok) {
     handleError(result, '无法生成动态码');
     return;
   }
-  $('totpCode').textContent = result.code;
-  totpRemaining = result.remaining;
-  totpPeriod = Number(result.period) || 30;
-  updateTotpProgress();
-  $('totpMeta').textContent = `${result.username || '无用户名'} · ${
-    result.remaining
-  } 秒后刷新`;
+  applyTotpResult(result);
+}
+
+/**
+ * Keep the inline TOTP chips on the vault list ticking. Chips are rebuilt on
+ * every render, so this only touches their text nodes.
+ */
+async function updateEntryOtps(force = false) {
+  const chips = [...document.querySelectorAll('[data-entry-otp-code]')];
+  if (!chips.length) return;
+  const now = Date.now();
+  for (const chip of chips) {
+    const id = chip.dataset.entryOtpCode;
+    let record = state.rowOtps.get(id);
+    const stale = !record || (record.type !== 'hotp' && record.expiresAt <= now);
+    if (force || stale) {
+      const result = await send('SV_GET_TOTP_CODE', { id });
+      if (!result?.ok) continue;
+      record = {
+        code: result.code,
+        type: result.type || 'totp',
+        counter: Number(result.counter) || 0,
+        period: Number(result.period) || 30,
+        expiresAt: now + (Number(result.remaining) || 0) * 1000,
+      };
+      state.rowOtps.set(id, record);
+    }
+    if (!record) continue;
+    const remaining = Math.max(0, Math.ceil((record.expiresAt - now) / 1000));
+    chip.textContent = record.code;
+    chip.dataset.entryOtpKind = record.type;
+    const metaNode = document.querySelector(
+      `[data-entry-otp-meta="${CSS.escape(id)}"]`,
+    );
+    if (metaNode) {
+      metaNode.textContent =
+        record.type === 'hotp'
+          ? `#${record.counter}`
+          : record.type === 'steam'
+            ? `Steam ${remaining}s`
+            : `${remaining}s`;
+    }
+  }
+}
+
+function startEntryOtpTimer() {
+  clearInterval(state.rowOtpTimer);
+  state.rowOtpTimer = setInterval(() => void updateEntryOtps(), 1000);
 }
 
 async function openTotp(entry) {
@@ -1767,22 +2311,19 @@ async function openTotp(entry) {
     return;
   }
   totpId = entry.id;
-  $('totpTitle').textContent = `${entry.title || entry.host} 的动态码`;
-  $('totpCode').textContent = result.code;
-  totpRemaining = result.remaining;
-  totpPeriod = Number(result.period) || 30;
-  updateTotpProgress();
-  $('totpMeta').textContent = `${result.username || '无用户名'} · ${result.remaining} 秒后刷新`;
+  $('totpTitle').dataset.entryLabel = `${entry.title || entry.host} 的动态码`;
+  applyTotpResult(result);
   $('totpDialog').showModal();
   clearInterval(totpTimer);
   totpTimer = setInterval(() => {
+    if (totpKind === 'hotp') return;
     totpRemaining -= 1;
     if (totpRemaining <= 0) {
       void loadTotpCode();
       return;
     }
     updateTotpProgress();
-    $('totpMeta').textContent = `${result.username || '无用户名'} · ${totpRemaining} 秒后刷新`;
+    $('totpMeta').textContent = totpMetaText();
   }, 1000);
 }
 
@@ -1791,8 +2332,13 @@ function closeTotp() {
   totpTimer = 0;
   totpId = '';
   totpRemaining = 0;
+  totpKind = 'totp';
+  totpCounter = 0;
   updateTotpProgress();
   $('totpCode').textContent = '------';
+  $('totpCode').dataset.kind = '';
+  $('totpProgress').hidden = false;
+  $('totpNextBtn').hidden = true;
   $('totpMeta').textContent = '';
 }
 
@@ -1906,7 +2452,10 @@ async function mergeDuplicateGroup(group) {
     return;
   }
   const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-  downloadText(`subvault-pre-merge-${stamp}.json`, snapshot.backup, 'application/json');
+  downloadBytes(
+    `subvault-pre-merge-${stamp}.${CONTAINER_EXTENSION}`,
+    base64ToBytes(snapshot.backupBase64),
+  );
   const result = await send('SV_MERGE_DUPLICATES', { key: group.key });
   if (!result.ok) {
     handleError(result, '合并失败');
@@ -1991,13 +2540,18 @@ async function openEntryDialog(id = null) {
     $('entryTotp').value = result.totpSecret || '';
     state.entryTotpMeta = result.totpSecret
       ? {
+          type: result.totpType || 'totp',
+          counter: result.totpCounter || 0,
           digits: result.totpDigits || 6,
           period: result.totpPeriod || 30,
           algorithm: result.totpAlgorithm || 'SHA1',
         }
       : null;
+    $('entryTotpType').value = state.entryTotpMeta?.type || 'totp';
+    $('entryTotpCounter').value = String(state.entryTotpMeta?.counter || 0);
+    syncEntryTotpType();
     $('entryTotpHint').textContent = result.totpSecret
-      ? '已配置 TOTP；可粘贴新的 otpauth 链接替换。'
+      ? '已配置动态码；可粘贴新的 otpauth 链接替换。'
       : '';
     $('entryFolder').value = result.folder || '';
     $('entryTags').value = Array.isArray(result.tags) ? result.tags.join(', ') : '';
@@ -2020,6 +2574,9 @@ async function openEntryDialog(id = null) {
     $('entryPassword').value = '';
     $('entryNotes').value = '';
     $('entryTotp').value = '';
+    $('entryTotpType').value = 'totp';
+    $('entryTotpCounter').value = '0';
+    syncEntryTotpType();
     $('entryTotpHint').textContent = '';
     $('entryFolder').value = '';
     $('entryTags').value = '';
@@ -2048,18 +2605,46 @@ function updateEntryPolicyHint() {
   }
 }
 
+/**
+ * Decode a QR code from an image file.
+ *
+ * Chrome's built-in BarcodeDetector is used when available; every other
+ * Chromium build falls back to the bundled jsQR decoder so the feature works
+ * offline without any network access.
+ */
+async function decodeQrImage(file) {
+  if ('BarcodeDetector' in window) {
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      const bitmap = await createImageBitmap(file);
+      const codes = await detector.detect(bitmap);
+      const raw = codes[0]?.rawValue?.trim();
+      if (raw) return raw;
+    } catch {
+      /* fall through to jsQR */
+    }
+  }
+  const jsQR = globalThis.jsQR;
+  if (typeof jsQR !== 'function') return '';
+  const bitmap = await createImageBitmap(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context2d = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context2d) return '';
+  context2d.drawImage(bitmap, 0, 0);
+  const pixels = context2d.getImageData(0, 0, canvas.width, canvas.height);
+  const decoded = jsQR(pixels.data, pixels.width, pixels.height, {
+    inversionAttempts: 'attemptBoth',
+  });
+  return decoded?.data?.trim() || '';
+}
+
 async function importTotpQr(file) {
   if (!file) return;
   const hint = $('entryTotpHint');
-  if (!('BarcodeDetector' in window)) {
-    hint.textContent = '当前 Chrome 不支持二维码识别，请直接粘贴 otpauth 链接。';
-    return;
-  }
   try {
-    const detector = new BarcodeDetector({ formats: ['qr_code'] });
-    const bitmap = await createImageBitmap(file);
-    const codes = await detector.detect(bitmap);
-    const raw = codes[0]?.rawValue?.trim();
+    const raw = await decodeQrImage(file);
     if (!raw) throw new Error('图片中没有识别到二维码');
     if (parseOtpAuthUri(raw)) {
       $('entryTotp').value = raw;
@@ -2073,6 +2658,12 @@ async function importTotpQr(file) {
   } catch (error) {
     hint.textContent = error?.message || '二维码识别失败';
   }
+}
+
+function syncEntryTotpType() {
+  const type = $('entryTotpType').value;
+  $('entryTotpCounterRow').hidden = type !== 'hotp';
+  $('entryTotpHint').dataset.type = type;
 }
 
 async function saveEntry() {
@@ -2121,6 +2712,8 @@ async function saveEntry() {
     password,
     notes: $('entryNotes').value,
     totpSecret: $('entryTotp').value.trim(),
+    totpType: state.entryTotpMeta?.type || $('entryTotpType').value,
+    totpCounter: state.entryTotpMeta?.counter ?? (Number($('entryTotpCounter').value) || 0),
     totpDigits: state.entryTotpMeta?.digits,
     totpPeriod: state.entryTotpMeta?.period,
     totpAlgorithm: state.entryTotpMeta?.algorithm,
@@ -2179,12 +2772,35 @@ function applyTheme() {
     ? state.settings.material
     : 'solid';
   document.documentElement.dataset.material = material;
+  const accent = ['indigo', 'ocean', 'emerald', 'rose', 'amber', 'violet'].includes(state.settings?.accentColor)
+    ? state.settings.accentColor
+    : 'indigo';
+  document.documentElement.dataset.accent = accent;
+  const glass = ['soft', 'strong', 'ultra'].includes(state.settings?.glassStrength)
+    ? state.settings.glassStrength
+    : 'strong';
+  document.documentElement.dataset.glass = glass;
+  const radius = ['soft', 'round', 'square'].includes(state.settings?.uiRadius)
+    ? state.settings.uiRadius
+    : 'soft';
+  document.documentElement.dataset.radius = radius;
+  document.querySelectorAll('#accentPicker .accent-swatch').forEach((swatch) => {
+    const active = swatch.dataset.accentValue === accent;
+    swatch.classList.toggle('is-active', active);
+    swatch.setAttribute('aria-checked', active ? 'true' : 'false');
+  });
 }
 
 function applySettings() {
   const settings = state.settings;
   applyTheme();
   $('autoLockSelect').value = String(settings.autoLockMinutes ?? 15);
+  if ($('passwordMaxAgeSelect')) {
+    $('passwordMaxAgeSelect').value = String(settings.passwordMaxAgeDays ?? 365);
+  }
+  if ($('trashRetentionSelect')) {
+    $('trashRetentionSelect').value = String(settings.trashRetentionDays ?? 30);
+  }
   $('clipboardClearSelect').value = String(settings.clipboardClearSeconds ?? 30);
   $('kdfSelect').value = settings.kdfAlgorithm || 'argon2id';
   if ($('syncTriggerSelect')) {
@@ -2197,8 +2813,14 @@ function applySettings() {
     $('syncScheduleTime').value = settings.syncScheduleTime || '09:00';
   }
   $('savePromptPositionSelect').value = settings.savePromptPosition || 'top-right';
+  if ($('otpToastSecondsSelect')) {
+    $('otpToastSecondsSelect').value = String(settings.otpToastSeconds || 5);
+  }
+  applyGeneratorOptions(settings.generatorOptions || {});
   $('themeSelect').value = settings.theme || 'system';
   $('materialSelect').value = settings.material || 'solid';
+  if ($('glassStrengthSelect')) $('glassStrengthSelect').value = settings.glassStrength || 'strong';
+  if ($('uiRadiusSelect')) $('uiRadiusSelect').value = settings.uiRadius || 'soft';
   if ($('uiLanguageSelect')) {
     $('uiLanguageSelect').value = ['auto', 'zh-CN', 'en'].includes(settings.uiLanguage)
       ? settings.uiLanguage
@@ -2892,10 +3514,9 @@ async function confirmCsvImport(button) {
       return;
     }
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-    downloadText(
-      `subvault-pre-import-${stamp}.json`,
-      snapshot.backup,
-      'application/json',
+    downloadBytes(
+      `subvault-pre-import-${stamp}.${CONTAINER_EXTENSION}`,
+      base64ToBytes(snapshot.backupBase64),
     );
 
     button.textContent = '正在导入…';
@@ -3012,11 +3633,6 @@ async function exportCsv() {
   toast('明文 CSV 已导出，请妥善保管');
 }
 
-async function sha256Hex(text) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 async function refreshBackupHealth() {
   const box = $('backupHealth');
   let meta = null;
@@ -3038,24 +3654,28 @@ async function refreshBackupHealth() {
 }
 
 async function verifyBackupStructure() {
-  if (!state.backupText) {
+  if (!state.backupBase64) {
     toast('请先选择备份文件', { error: true });
     return;
   }
   try {
-    const parsed = JSON.parse(state.backupText);
+    const parsed = await unpackContainer(base64ToBytes(state.backupBase64));
     if (!parsed || typeof parsed !== 'object' || !parsed.box) {
       throw new Error('不是 SubVault 加密备份');
     }
-    toast('备份结构有效', '加密数据存在，恢复时仍需校验密码。');
+    toast(
+      '备份结构有效',
+      parsed.keyFile
+        ? `该备份绑定了密钥文件 ${keyFileLabel(parsed.keyFileFingerprint)}，恢复时必须一并选择。`
+        : '加密数据存在，恢复时仍需校验密码。',
+    );
   } catch (error) {
-    toast('备份校验失败', error?.message || 'JSON 格式无效', { error: true });
+    toast('备份校验失败', error?.message || '文件格式无效', { error: true });
   }
 }
 
-function downloadRecoveryKit() {
-  const stamp = new Date().toISOString().slice(0, 10);
-  const lines = [
+function recoveryKitLines() {
+  return [
     'SubVault Recovery Kit',
     '',
     `生成时间：${formatDateTime(Date.now())}`,
@@ -3071,19 +3691,44 @@ function downloadRecoveryKit() {
     '恢复步骤：',
     '1. 安装同版本或更新版本的 SubVault。',
     '2. 打开设置 → 导入与导出。',
-    '3. 选择加密备份文件并输入对应密码。',
+    '3. 选择加密备份文件（.svbak）并输入对应密码。',
     '4. 先在空密码库或合并模式中验证账号，再执行覆盖恢复。',
     '',
     '如需重新导出，请在设置页点击“导出加密备份”。',
   ];
-  downloadText(`subvault-recovery-kit-${stamp}.txt`, lines.join('\n'), 'text/plain;charset=utf-8');
-  toast('恢复说明已下载', '请与加密备份分开保存。');
+}
+
+function openRecoveryKitDialog() {
+  const pre = $('recoveryKitText');
+  if (pre) pre.textContent = recoveryKitLines().join('\n');
+  $('recoveryKitDialog')?.showModal();
+}
+
+async function downloadRecoveryKit() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const record = {
+    app: 'SubVault',
+    format: 'subvault-recovery-kit',
+    version: 1,
+    generatedAt: Date.now(),
+    lines: recoveryKitLines(),
+  };
+  downloadBytes(
+    `subvault-recovery-kit-${stamp}.${CONTAINER_EXTENSION}`,
+    await packContainer(record),
+  );
+  toast('恢复说明已下载', '私有格式，需在 SubVault 设置页查看。');
 }
 
 async function exportBackup() {
   const backupPassword = $('exportBackupPassword').value;
+  const withKeyFile = Boolean($('exportBackupKeyFile')?.checked);
   if (backupPassword && backupPassword.length < 10) {
     toast('独立备份密码至少需要 10 个字符', { error: true });
+    return;
+  }
+  if (withKeyFile && !backupPassword) {
+    toast('启用密钥文件时必须填写独立备份密码', { error: true });
     return;
   }
   const expiryDays = Number($('exportBackupExpiry').value) || 0;
@@ -3100,31 +3745,49 @@ async function exportBackup() {
     return;
   }
   const backupExpiresAt = expiryDays ? Date.now() + expiryDays * 86400000 : 0;
-  const result = await send('SV_EXPORT_BACKUP', { backupPassword, backupExpiresAt });
+  const keyFile = withKeyFile ? createKeyFile() : null;
+  const result = await send('SV_EXPORT_BACKUP', {
+    backupPassword,
+    backupExpiresAt,
+    keyFileBase64: keyFile ? keyFile.base64 : '',
+  });
   if (!result.ok) {
     handleError(result, '导出备份失败');
     return;
   }
   const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-  const checksum = await sha256Hex(result.backup);
-  downloadText(`subvault-backup-${stamp}.json`, result.backup, 'application/json');
-  downloadText(`subvault-backup-${stamp}.sha256`, `${checksum}  subvault-backup-${stamp}.json\n`);
+  const bytes = base64ToBytes(result.backupBase64);
+  const fileName = `subvault-backup-${stamp}.${CONTAINER_EXTENSION}`;
+  const checksum = await sha256Hex(bytes);
+  downloadBytes(fileName, bytes);
+  downloadText(`subvault-backup-${stamp}.sha256`, `${checksum}  ${fileName}\n`);
+  let keyFileLabelText = '';
+  if (keyFile) {
+    const keyName = `subvault-backup-${stamp}.${KEY_FILE_EXTENSION}`;
+    downloadBytes(keyName, keyFile.bytes);
+    keyFileLabelText = keyFileLabel((await sha256Hex(keyFile.base64)).slice(0, 16));
+  }
   await chrome.storage.local.set({
     backupMeta: { at: Date.now(), checksum, independent: Boolean(result.independent) },
   });
   await refreshBackupHealth();
   $('exportBackupPassword').value = '';
   $('exportBackupExpiry').value = '0';
+  if ($('exportBackupKeyFile')) $('exportBackupKeyFile').checked = false;
   toast(
-    result.independent
-      ? '已导出独立密码加密的备份，请单独保管该密码'
-      : '已导出主密码加密的备份',
-    `SHA-256 ${checksum.slice(0, 12)}…`,
+    keyFile
+      ? `已导出备份和密钥文件 ${keyFileLabelText}`
+      : result.independent
+        ? '已导出独立密码加密的备份，请单独保管该密码'
+        : '已导出主密码加密的备份',
+    keyFile
+      ? '请把 .svkey 与 .svbak 分开存放；恢复时两者都必须提供。'
+      : `SHA-256 ${checksum.slice(0, 12)}…`,
   );
 }
 
 async function importBackup() {
-  if (!state.backupText) {
+  if (!state.backupBase64) {
     toast('请先选择备份文件', { error: true });
     return;
   }
@@ -3132,6 +3795,20 @@ async function importBackup() {
   if (!password) {
     toast('请输入该备份文件的密码', { error: true });
     return;
+  }
+  let keyFileBase64 = '';
+  if (!$('backupKeyFileRow')?.hidden) {
+    const keyFile = $('backupKeyFile')?.files?.[0];
+    if (!keyFile) {
+      toast('该备份需要配套的密钥文件', { error: true });
+      return;
+    }
+    try {
+      keyFileBase64 = (await describeKeyFile(await readFileBase64(keyFile))).base64;
+    } catch (error) {
+      toast(error?.message || '密钥文件无法读取', { error: true });
+      return;
+    }
   }
   const mode = $('backupRestoreMode').value;
   const restoreSettings = $('backupRestoreSettings').checked;
@@ -3149,14 +3826,18 @@ async function importBackup() {
       return;
     }
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-    downloadText(`subvault-pre-restore-${stamp}.json`, snapshot.backup, 'application/json');
+    downloadBytes(
+      `subvault-pre-restore-${stamp}.${CONTAINER_EXTENSION}`,
+      base64ToBytes(snapshot.backupBase64),
+    );
   }
 
   const button = $('importBackupBtn');
   setBusy(button, true, '恢复中…');
   const result = await send('SV_IMPORT_BACKUP', {
-    text: state.backupText,
+    base64: state.backupBase64,
     password,
+    keyFileBase64,
     mode,
     restoreSettings,
   });
@@ -3166,6 +3847,8 @@ async function importBackup() {
     return;
   }
   $('backupPassword').value = '';
+  if ($('backupKeyFile')) $('backupKeyFile').value = '';
+  if ($('backupKeyFileRow')) $('backupKeyFileRow').hidden = true;
   toast(
     result.replaced
       ? `已覆盖恢复 ${result.total || 0} 条账号${result.settingsRestored ? '，设置已恢复' : ''}`
@@ -3442,15 +4125,125 @@ function enhanceFilePickers() {
   }
 }
 
+let generatorSaveTimer = 0;
+
+function generatorOptionsFromUi() {
+  const pin = false;
+  const length = Math.min(128, Math.max(8, Number($('genLengthInput')?.value) || 20));
+  return {
+    length,
+    lower: $('genLower') ? $('genLower').checked : true,
+    upper: $('genUpper') ? $('genUpper').checked : true,
+    digits: $('genDigits') ? $('genDigits').checked : true,
+    symbols: $('genSymbols') ? $('genSymbols').checked : true,
+    pin,
+    readable: $('genReadable') ? $('genReadable').checked : true,
+  };
+}
+
+function applyGeneratorOptions(options = {}) {
+  if ($('genLengthInput')) $('genLengthInput').value = String(options.length || 20);
+  if ($('genLower')) $('genLower').checked = options.lower !== false;
+  if ($('genUpper')) $('genUpper').checked = options.upper !== false;
+  if ($('genDigits')) $('genDigits').checked = options.digits !== false;
+  if ($('genSymbols')) $('genSymbols').checked = options.symbols !== false;
+  if ($('genReadable')) $('genReadable').checked = options.readable !== false;
+}
+
+function previewGeneratedPassword() {
+  const options = generatorOptionsFromUi();
+  if (!options.lower && !options.upper && !options.digits && !options.symbols) {
+    toast('至少选择一种字符类型', { error: true });
+    return;
+  }
+  const value = generatePassword(options);
+  if ($('genPreview')) $('genPreview').textContent = value;
+  state.generatorPreview = value;
+}
+
+async function persistGeneratorOptions() {
+  const options = generatorOptionsFromUi();
+  try {
+    const result = await send('SV_SET_SETTINGS', { settings: { generatorOptions: options } });
+    if (result.ok) state.settings.generatorOptions = result.settings.generatorOptions;
+  } catch {
+    /* best-effort; the preview still works */
+  }
+}
+
+function scheduleGeneratorSave() {
+  clearTimeout(generatorSaveTimer);
+  generatorSaveTimer = setTimeout(() => void persistGeneratorOptions(), 300);
+}
+
 function generateExportSecret(inputId) {
   const input = $(inputId);
   if (!input) return;
-  input.value = generatePassword({ length: 20, readable: true });
+  const options = generatorOptionsFromUi();
+  if (!options.lower && !options.upper && !options.digits && !options.symbols) {
+    toast('至少选择一种字符类型', { error: true });
+    return;
+  }
+  input.value = generatePassword(options);
   input.type = 'text';
   toast('已生成强随机密码', '请立即复制保存；关闭页面后无法恢复');
 }
 
 function bindEvents() {
+  $('hostFilter')?.addEventListener('change', () => {
+    state.hostFilter = $('hostFilter').value;
+    state.limit = 100;
+    renderVault();
+  });
+  $('tagFilter')?.addEventListener('change', () => {
+    state.tagFilter = $('tagFilter').value;
+    state.limit = 100;
+    renderVault();
+  });
+  for (const id of ['genLengthInput', 'genLower', 'genUpper', 'genDigits', 'genSymbols', 'genReadable']) {
+    const input = $(id);
+    if (!input) continue;
+    input.addEventListener('input', () => {
+      previewGeneratedPassword();
+      scheduleGeneratorSave();
+    });
+    input.addEventListener('change', () => {
+      previewGeneratedPassword();
+      scheduleGeneratorSave();
+    });
+  }
+  $('generatorPreviewBtn')?.addEventListener('click', previewGeneratedPassword);
+  $('genCopyBtn')?.addEventListener('click', async () => {
+    const value = state.generatorPreview || $('genPreview')?.textContent || '';
+    if (!value || value === '点击“生成预览”') {
+      previewGeneratedPassword();
+      return;
+    }
+    const ok = await copyText(value);
+    toast(ok ? '已复制生成的密码' : '复制失败，请手动选择', ok ? undefined : { error: true });
+  });
+  $('openTrashBtn')?.addEventListener('click', () => {
+    void refreshTrash().then(() => $('trashDialog')?.showModal());
+  });
+  $('trashClose')?.addEventListener('click', () => $('trashDialog')?.close());
+  $('trashDialog')?.addEventListener('close', () => {
+    $('trashList')?.replaceChildren();
+  });
+  $('emptyTrashBtn')?.addEventListener('click', async () => {
+    if (!state.trash.length) return;
+    if (!window.confirm(`确定清空回收站中的 ${state.trash.length} 条记录？此操作不可恢复。`)) return;
+    const result = await send('SV_EMPTY_TRASH');
+    if (!result.ok) {
+      handleError(result, '清空回收站失败');
+      return;
+    }
+    toast(`已清空 ${result.emptied || 0} 条回收站记录`);
+    await loadAll();
+    if ($('trashDialog')?.open) void refreshTrash();
+  });
+  $('otpToastSecondsSelect')?.addEventListener('change', () => {
+    void saveSettings({ otpToastSeconds: Number($('otpToastSecondsSelect').value) });
+  });
   $('migrationRollbackBtn')?.addEventListener('click', () => void rollbackMigration());
   $('gateDeviceUnlockBtn')?.addEventListener('click', () => void deviceUnlockFromGate());
   $('deviceEnableBtn')?.addEventListener('click', () => void enableDeviceBinding());
@@ -3608,6 +4401,29 @@ function bindEvents() {
     await loadAll();
   });
 
+  $('gateWebdavOpen').addEventListener('click', () => {
+    $('gateSetupForm').hidden = true;
+    $('gateImportPrompt').hidden = true;
+    $('gateImportForm').hidden = true;
+    $('gateWebdavForm').hidden = false;
+    $('gateWebdavOpen').hidden = true;
+    $('gateTitle').textContent = '从 WebDAV 恢复';
+    $('gateSub').textContent = '填写远端地址和该备份的主密码，恢复后自动解锁。';
+    setError($('gateError'), '');
+    $('gateWebdavUrl').focus();
+  });
+
+  $('gateWebdavBack').addEventListener('click', () => {
+    $('gateWebdavForm').hidden = true;
+    $('gateSetupForm').hidden = false;
+    $('gateWebdavOpen').hidden = false;
+    $('gateTitle').textContent = '创建本地密码库';
+    $('gateSub').textContent = '设置一个主密码。它只在本机用于加密，忘记后无法找回。';
+    setError($('gateError'), '');
+  });
+
+  $('gateWebdavBtn').addEventListener('click', () => void restoreFromWebdavOnGate());
+
   $('gateImportChoose').addEventListener('click', () => {
     $('gateImportPrompt').hidden = true;
     $('gateImportForm').hidden = false;
@@ -3724,6 +4540,31 @@ function bindEvents() {
     state.limit = 200;
     renderVault();
   });
+  document.querySelectorAll('[data-stat-filter]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const target = card.dataset.statFilter;
+      if (target === 'hosts') {
+        $('hostFilter').focus();
+        return;
+      }
+      state.filter = target;
+      state.hostFilter = '';
+      $('hostFilter').value = '';
+      $('filterSelect').value = target;
+      state.limit = 200;
+      renderVault();
+    });
+  });
+  $('healthRing')?.addEventListener('click', () => {
+    state.filter = 'issues';
+    state.hostFilter = '';
+    $('hostFilter').value = '';
+    $('filterSelect').value = 'issues';
+    state.limit = 200;
+    renderVault();
+    const first = $('vaultList').querySelector('.entry-card');
+    if (first) first.scrollIntoView({ block: 'nearest' });
+  });
   $('sortSelect').addEventListener('change', () => {
     state.sort = $('sortSelect').value;
     renderVault();
@@ -3770,7 +4611,7 @@ function bindEvents() {
     updateStrength($('entryPassword'), $('entryStrengthBar'), $('entryStrengthText'));
   });
   $('entryGenerate').addEventListener('click', () => {
-    const options = state.settings?.generatorOptions || {};
+    const options = $('genLengthInput') ? generatorOptionsFromUi() : state.settings?.generatorOptions || {};
     $('entryPassword').value = options.pin
       ? generatePin(options.length)
       : generatePassword({
@@ -3794,12 +4635,30 @@ function bindEvents() {
     }
     try {
       const parsed = parseOtpAuthUri(raw);
+      if (parsed) {
+        $('entryTotpType').value = parsed.type || 'totp';
+        if (parsed.type === 'hotp') $('entryTotpCounter').value = String(parsed.counter || 0);
+        syncEntryTotpType();
+      }
       $('entryTotpHint').textContent = parsed
-        ? `${parsed.issuer || 'TOTP'} · ${parsed.account || '账号'} · ${parsed.algorithm} / ${parsed.period}s`
+        ? `${parsed.issuer || parsed.type.toUpperCase()} · ${parsed.account || '账号'} · ${
+            parsed.type === 'hotp'
+              ? `计数器 #${parsed.counter}`
+              : parsed.type === 'steam'
+                ? 'Steam Guard / 30s'
+                : `${parsed.algorithm} / ${parsed.period}s`
+          }`
         : 'Base32 密钥；保存时校验。';
     } catch (error) {
       $('entryTotpHint').textContent = error?.message || 'otpauth 链接无效';
     }
+  });
+  $('entryTotpType').addEventListener('change', () => {
+    state.entryTotpMeta = null;
+    syncEntryTotpType();
+  });
+  $('entryTotpCounter').addEventListener('input', () => {
+    state.entryTotpMeta = null;
   });
   $('entryTotpQrBtn').addEventListener('click', () => $('entryTotpQrFile').click());
   $('entryTotpQrFile').addEventListener('change', () => {
@@ -3831,6 +4690,12 @@ function bindEvents() {
   $('kdfSelect').addEventListener('change', () => {
     void saveSettings({ kdfAlgorithm: $('kdfSelect').value });
   });
+  $('passwordMaxAgeSelect')?.addEventListener('change', () => {
+    void saveSettings({ passwordMaxAgeDays: Number($('passwordMaxAgeSelect').value) });
+  });
+  $('trashRetentionSelect')?.addEventListener('change', () => {
+    void saveSettings({ trashRetentionDays: Number($('trashRetentionSelect').value) });
+  });
   $('savePromptPositionSelect').addEventListener('change', () => {
     void saveSettings({ savePromptPosition: $('savePromptPositionSelect').value });
   });
@@ -3839,6 +4704,17 @@ function bindEvents() {
   });
   $('materialSelect').addEventListener('change', () => {
     void saveSettings({ material: $('materialSelect').value });
+  });
+  $('glassStrengthSelect').addEventListener('change', () => {
+    void saveSettings({ glassStrength: $('glassStrengthSelect').value });
+  });
+  $('uiRadiusSelect').addEventListener('change', () => {
+    void saveSettings({ uiRadius: $('uiRadiusSelect').value });
+  });
+  document.querySelectorAll('#accentPicker .accent-swatch').forEach((swatch) => {
+    swatch.addEventListener('click', () => {
+      void saveSettings({ accentColor: swatch.dataset.accentValue });
+    });
   });
   $('uiLanguageSelect')?.addEventListener('change', async () => {
     const language = $('uiLanguageSelect').value;
@@ -3867,6 +4743,10 @@ function bindEvents() {
           )
         ) {
           toast('已保存；刷新已打开的网页后完全生效');
+        }
+        if (ok && key === 'webdavAutoBackup') {
+          toast(input.checked ? '已开启定时自动备份' : '已关闭定时自动备份');
+          void refreshWebdavBackupStatus();
         }
       });
     });
@@ -3904,6 +4784,7 @@ function bindEvents() {
     const ok = await copyText(code);
     toast(ok ? '动态码已复制' : '复制失败', { error: !ok });
   });
+  $('totpNextBtn').addEventListener('click', () => void loadTotpCode({ advance: true }));
   $('historyClose').addEventListener('click', () => $('historyDialog').close());
   $('historyDialog').addEventListener('close', () => {
     $('historyList').replaceChildren();
@@ -3935,7 +4816,15 @@ function bindEvents() {
 
   $('exportCsvBtn').addEventListener('click', () => void exportCsv());
   $('exportBackupBtn').addEventListener('click', () => void exportBackup());
-  $('recoveryKitBtn').addEventListener('click', downloadRecoveryKit);
+  $('recoveryKitBtn').addEventListener('click', () => void downloadRecoveryKit());
+  $('recoveryKitViewBtn').addEventListener('click', openRecoveryKitDialog);
+  $('recoveryKitDownload').addEventListener('click', () => void downloadRecoveryKit());
+  $('recoveryKitCopy').addEventListener('click', async () => {
+    const text = $('recoveryKitText').textContent || '';
+    const ok = await copyText(text);
+    toast(ok ? '恢复说明已复制' : '复制失败，请手动选择', ok ? undefined : { error: true });
+  });
+  $('recoveryKitClose').addEventListener('click', () => $('recoveryKitDialog').close());
   $('verifyBackupBtn').addEventListener('click', () => void verifyBackupStructure());
   $('chooseBackupBtn').addEventListener('click', () => $('backupFile').click());
   $('backupFile').addEventListener('change', async () => {
@@ -3946,10 +4835,25 @@ function bindEvents() {
       return;
     }
     try {
-      state.backupText = await file.text();
+      state.backupBase64 = await readFileBase64(file);
       state.backupName = file.name;
       $('backupFileName').textContent = `已选择：${file.name}`;
       $('backupFileName').hidden = false;
+      let needsKeyFile = false;
+      try {
+        const parsed = await unpackContainer(base64ToBytes(state.backupBase64));
+        needsKeyFile = Boolean(parsed?.keyFile);
+        if (needsKeyFile) {
+          $('backupFileName').textContent =
+            `已选择：${file.name}（绑定密钥文件 ${keyFileLabel(parsed.keyFileFingerprint)}）`;
+        }
+      } catch {
+        needsKeyFile = false;
+      }
+      if ($('backupKeyFileRow')) {
+        $('backupKeyFileRow').hidden = !needsKeyFile;
+        if (!needsKeyFile && $('backupKeyFile')) $('backupKeyFile').value = '';
+      }
     } catch {
       toast('读取备份文件失败', { error: true });
     }
@@ -3974,6 +4878,23 @@ function bindEvents() {
   $('webdavRestoreBtn')?.addEventListener('click', () => void restoreWebdavBackup());
   $('webdavSaveBtn')?.addEventListener('click', () => void saveWebdavConfig());
   $('webdavClearBtn')?.addEventListener('click', () => void clearWebdavConfig());
+  $('webdavHistoryBtn')?.addEventListener('click', () => void loadWebdavHistory());
+  $('webdavPruneBtn')?.addEventListener('click', () => void pruneWebdavHistory());
+  const autoRanges = {
+    webdavAutoBackupHours: [1, 168, 24],
+    webdavKeepCopies: [0, 200, 10],
+    webdavArchiveDays: [0, 3650, 0],
+  };
+  for (const [id, [min, max, fallback]] of Object.entries(autoRanges)) {
+    $(id)?.addEventListener('change', () => {
+      const raw = Number($(id).value);
+      const value = Number.isFinite(raw)
+        ? Math.max(min, Math.min(max, Math.round(raw)))
+        : fallback;
+      $(id).value = String(value);
+      void saveWebdavAutoSettings({ [id]: value });
+    });
+  }
   $('syncNowBtn')?.addEventListener('click', () => void syncNow());
   $('syncRefreshBtn')?.addEventListener('click', () => void refreshSyncCenter());
   $('syncKeepRemoteBtn')?.addEventListener('click', () => void resolveSyncConflict('remote'));
@@ -4003,6 +4924,7 @@ function bindEvents() {
   });
   $('shareExportBtn')?.addEventListener('click', () => void exportShare());
   $('shareImportBtn')?.addEventListener('click', () => void importShare());
+  $('shareFile')?.addEventListener('change', () => void detectShareKeyFile());
 
   $('travelEntryList')?.addEventListener('change', (event) => {
     const input = event.target.closest?.('input[data-travel-id]');
@@ -4030,6 +4952,7 @@ function bindEvents() {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.settings?.newValue) {
+      settingsEpoch += 1;
       state.settings = { ...state.settings, ...changes.settings.newValue };
       applySettings();
       return;
@@ -4070,7 +4993,9 @@ async function bootstrap() {
   if (!state.initialized) {
     showGate('setup');
     return;
-  }  if (state.locked) {
+  }
+
+  if (state.locked) {
     showGate('unlock');
     return;
   }

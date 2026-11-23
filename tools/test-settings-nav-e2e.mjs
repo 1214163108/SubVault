@@ -41,7 +41,12 @@ try {
   await page.evaluate(() =>
     chrome.runtime.sendMessage({
       type: 'SV_SET_SETTINGS',
-      settings: { lockOnSystemLock: false, lockOnSystemIdle: false, autoLockMinutes: 0 },
+      settings: {
+        lockOnSystemLock: false,
+        lockOnSystemIdle: false,
+        autoLockMinutes: 0,
+        privacyShieldOnBlur: false,
+      },
     }),
   );
   await page.reload();

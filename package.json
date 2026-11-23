@@ -1,6 +1,6 @@
 {
   "name": "subvault-extension",
-  "version": "2.3.1",
+  "version": "2.6.5",
   "private": true,
   "type": "module",
   "description": "SubVault Chromium extension (local encrypted password manager)",

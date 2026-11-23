@@ -76,13 +76,17 @@ try {
   await options.reload();
   await options.waitForTimeout(900);
   const optionsText = await options.locator('body').innerText();
+  await options.click('[data-section="security"]');
+  await options.waitForTimeout(500);
+  const securityText = await options.locator('body').innerText();
   result.options = {
     gateHidden: await options.locator('#gate').isHidden().catch(() => null),
     textHead: optionsText.replace(/\s+/g, ' ').slice(0, 260),
     hasImportExport: optionsText.includes('Import & export'),
-    hasAutoLock: optionsText.includes('Auto-lock'),
-    hasSecurity: optionsText.includes('Security & takeover'),
+    hasAutoLock: securityText.includes('Auto-lock'),
+    hasSecurity: optionsText.includes('Security'),
     leftoverSample: (optionsText.match(/[\u4e00-\u9fff]{2,}/g) || []).slice(0, 8),
+    securityLeftoverSample: (securityText.match(/[\u4e00-\u9fff]{2,}/g) || []).slice(0, 8),
   };
 
   await options.evaluate(() =>
@@ -122,9 +126,15 @@ try {
     result.extensionLanguage.toLowerCase().startsWith('en') &&
     result.manifestName === 'SubVault Subdomain Password Vault' &&
     result.popup.hasAddAccount &&
+    result.popup.leftoverSample.length === 0 &&
     result.options.hasImportExport &&
+    result.options.hasSecurity &&
+    result.options.hasAutoLock &&
+    result.options.leftoverSample.length === 0 &&
+    result.options.securityLeftoverSample.length === 0 &&
     result.content.triggerLabel === 'Fill with SubVault' &&
-    result.content.panel?.hasFillLogin;
+    result.content.panel?.hasFillLogin &&
+    result.content.panel?.leftoverSample.length === 0;
   console.log(JSON.stringify(result, null, 2));
 } finally {
   await context.close();

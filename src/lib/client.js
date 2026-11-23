@@ -139,6 +139,18 @@ export function downloadText(filename, text, mime = 'text/plain;charset=utf-8') 
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+export function downloadBytes(filename, bytes, mime = 'application/octet-stream') {
+  const blob = new Blob([bytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 export function makeToast(element) {
   let timer = 0;
   return (message, optionsOrDetail = {}, maybeOptions = {}) => {
@@ -153,18 +165,31 @@ export function makeToast(element) {
     element.replaceChildren();
     const titleText = String(message ?? '').trim();
     const detailText = String(detail ?? '').trim();
+    const copy = document.createElement('div');
+    copy.className = 'toast-copy';
     const title = document.createElement('div');
     title.className = 'toast-title';
     title.setAttribute('data-i18n-raw', '');
     title.textContent = titleText || detailText || tr('操作完成');
-    element.appendChild(title);
+    copy.appendChild(title);
     if (titleText && detailText) {
       const detailElement = document.createElement('div');
       detailElement.className = 'toast-detail';
       detailElement.setAttribute('data-i18n-raw', '');
       detailElement.textContent = detailText;
-      element.appendChild(detailElement);
+      copy.appendChild(detailElement);
     }
+    const track = document.createElement('div');
+    track.className = 'toast-track';
+    const bar = document.createElement('span');
+    bar.className = 'toast-bar';
+    track.appendChild(bar);
+    element.append(copy, track);
+    bar.style.width = '100%';
+    requestAnimationFrame(() => {
+      bar.style.transition = `width ${duration}ms linear`;
+      bar.style.width = '0%';
+    });
     element.setAttribute('role', 'status');
     element.setAttribute('aria-live', 'polite');
     element.setAttribute('aria-atomic', 'true');
@@ -197,4 +222,23 @@ export function readFileBase64(file) {
     reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * Site favicon URL backed by the `favicon` permission. Returns '' when the
+ * host is missing or not http(s), so callers can fall back to a letter avatar.
+ */
+export function faviconUrl(host, size = 32) {
+  if (!host) return '';
+  try {
+    if (!chrome?.runtime?.getURL) return '';
+    const origin = /^https?:\/\//i.test(host) ? host : `https://${host}`;
+    const parsed = new URL(origin);
+    if (!/^https?:$/.test(parsed.protocol)) return '';
+    return chrome.runtime.getURL(
+      `/_favicon/?pageUrl=${encodeURIComponent(parsed.origin)}&size=${size}`,
+    );
+  } catch {
+    return '';
+  }
 }

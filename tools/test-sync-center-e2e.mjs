@@ -45,6 +45,7 @@ async function noIdle(page) {
       lockOnSystemLock: false,
       lockOnSystemIdle: false,
       autoLockMinutes: 0,
+      privacyShieldOnBlur: false,
     },
   });
 }

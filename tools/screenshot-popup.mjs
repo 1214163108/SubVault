@@ -3,11 +3,16 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 const root = path.resolve(import.meta.dirname, '..');
+// Keep the native host away from the real per-user vault during tests.
+const syncDir = path.join(path.resolve(import.meta.dirname, '..'), '.tmp-host', 'screenshot-popup-data');
+fs.rmSync(syncDir, { recursive: true, force: true });
+fs.mkdirSync(syncDir, { recursive: true });
 const out = path.join(root, 'docs');
 fs.mkdirSync(out, { recursive: true });
 
 const context = await chromium.launchPersistentContext('', {
   headless: false,
+  env: { ...process.env, SUBVAULT_SYNC_DIR: syncDir },
   args: [
     `--disable-extensions-except=${root}`,
     `--load-extension=${root}`,

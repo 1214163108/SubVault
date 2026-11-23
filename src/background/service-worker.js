@@ -15,6 +15,7 @@
 // the bundled zxcvbn estimator on the global object before validation runs.
 import '../vendor/zxcvbn.js';
 import { bindKdfToExpiry } from '../lib/share.js';
+import { packContainer, unpackContainer } from '../lib/container.js';
 
 import {
   KDF_ITERATIONS,
@@ -59,7 +60,13 @@ import {
 } from '../lib/domain.js';
 import { csvToEntries, entriesToCsv } from '../lib/csv.js';
 import { entryTime, conflictGroupKey, mergeEntries } from '../lib/merge.js';
-import { generateTotp, isValidTotpSecret, normalizeTotpSecret, parseOtpAuthUri } from '../lib/totp.js';
+import {
+  OTP_TYPES,
+  generateOtpForEntry,
+  isValidTotpSecret,
+  normalizeTotpSecret,
+  parseOtpAuthUri,
+} from '../lib/totp.js';
 import { generatePassword } from '../lib/generator.js';
 import { isWeakPasswordHash } from '../vendor/weak-passwords.js';
 import { evaluateMasterPassword } from '../lib/strength.js';
@@ -106,10 +113,14 @@ const DEFAULT_SETTINGS = {
   autoOpenOnFocus: false,
   allowSequenceSubmit: false,
   privacyShieldOnBlur: true,
+  otpToastSeconds: 5,
   savePrompt: true,
   savePromptPosition: 'top-right',
   theme: 'system',
   material: 'solid',
+  accentColor: 'indigo',
+  glassStrength: 'strong',
+  uiRadius: 'soft',
   showIcon: true,
   takeoverMode: true,
   clearNativeAutofill: true,
@@ -124,6 +135,12 @@ const DEFAULT_SETTINGS = {
   syncTrigger: 'realtime',
   syncIntervalMinutes: 15,
   syncScheduleTime: '09:00',
+  passwordMaxAgeDays: 365,
+  trashRetentionDays: 30,
+  webdavAutoBackup: false,
+  webdavAutoBackupHours: 24,
+  webdavKeepCopies: 10,
+  webdavArchiveDays: 0,
   syncTransport: 'host',
   uiLanguage: 'auto',
   generatorOptions: {
@@ -139,6 +156,7 @@ const DEFAULT_SETTINGS = {
 const ALARM_NAME = 'subvault-auto-lock';
 const LOCK_ALARM_NAME = 'subvault-lock-at';
 const SYNC_ALARM_NAME = 'subvault-sync-poll';
+const WEBDAV_BACKUP_ALARM = 'subvault-webdav-backup';
 const SYNC_TRIGGERS = ['realtime', 'interval', 'scheduled', 'unlock', 'manual'];
 
 /** @type {{key: CryptoKey, keyJwk: any, kdf: any, data: any, lastActivity: number}|null} */
@@ -195,6 +213,7 @@ function resetSyncTarget() {
   syncInfo.etag = '';
   syncInfo.busy = false;
   syncInfo.conflict = null;
+  syncInfo.identityMismatch = false;
   syncInfo.joined = false;
   syncInfo.lastError = '';
   syncInfo.lastErrorCode = '';
@@ -213,6 +232,7 @@ const syncMetaReady = (async () => {
       syncInfo.conflict = stored.conflict && typeof stored.conflict === 'object'
         ? stored.conflict
         : null;
+      syncInfo.identityMismatch = Boolean(stored.identityMismatch);
       syncBaseRevision = Number(stored.baseRevision) || 0;
       syncInfo.etag = String(stored.etag || '');
       syncInfo.failures = Number(stored.failures) || 0;
@@ -454,6 +474,38 @@ const customPslReady = (async () => {
   }
 })();
 
+function normalizeAutoBackupHours(value) {
+  const hours = Number(value);
+  return Number.isFinite(hours) && hours >= 1 && hours <= 168 ? Math.round(hours) : 24;
+}
+
+function normalizeKeepCopies(value) {
+  const count = Number(value);
+  return Number.isFinite(count) && count >= 0 && count <= 200 ? Math.round(count) : 10;
+}
+
+function normalizeArchiveDays(value) {
+  const days = Number(value);
+  return Number.isFinite(days) && days >= 0 && days <= 3650 ? Math.round(days) : 0;
+}
+
+/** 0 disables the reminder entirely. */
+function normalizePasswordMaxAge(value) {
+  const days = Number(value);
+  return Number.isFinite(days) && days >= 0 && days <= 3650 ? Math.round(days) : 365;
+}
+
+/** 0 keeps trashed entries forever. */
+function normalizeTrashRetention(value) {
+  const days = Number(value);
+  return Number.isFinite(days) && days >= 0 && days <= 365 ? Math.round(days) : 30;
+}
+
+function normalizeOtpToastSeconds(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 1 && seconds <= 60 ? Math.round(seconds) : 5;
+}
+
 async function getSettings() {
   await customPslReady;
   if (settingsCache) return settingsCache;
@@ -464,9 +516,16 @@ async function getSettings() {
     isolatedDomains: normalizeDomainList(stored?.isolatedDomains),
     siteExceptions: normalizeSiteExceptions(stored?.siteExceptions),
     generatorOptions: normalizeGeneratorOptions(stored?.generatorOptions),
+    otpToastSeconds: normalizeOtpToastSeconds(stored?.otpToastSeconds),
     syncTrigger: normalizeSyncTrigger(stored?.syncTrigger),
     syncIntervalMinutes: normalizeSyncInterval(stored?.syncIntervalMinutes),
     syncScheduleTime: normalizeSyncTime(stored?.syncScheduleTime),
+    passwordMaxAgeDays: normalizePasswordMaxAge(stored?.passwordMaxAgeDays),
+    trashRetentionDays: normalizeTrashRetention(stored?.trashRetentionDays),
+    webdavAutoBackup: Boolean(stored?.webdavAutoBackup),
+    webdavAutoBackupHours: normalizeAutoBackupHours(stored?.webdavAutoBackupHours),
+    webdavKeepCopies: normalizeKeepCopies(stored?.webdavKeepCopies),
+    webdavArchiveDays: normalizeArchiveDays(stored?.webdavArchiveDays),
     syncTransport: 'host',
     uiLanguage: normalizeUiLanguage(stored?.uiLanguage),
   };
@@ -485,8 +544,15 @@ async function saveSettings(patch) {
   if (next.syncTrigger !== undefined) {
     next.syncTrigger = normalizeSyncTrigger(next.syncTrigger);
   }
+  next.otpToastSeconds = normalizeOtpToastSeconds(next.otpToastSeconds);
   next.syncIntervalMinutes = normalizeSyncInterval(next.syncIntervalMinutes);
   next.syncScheduleTime = normalizeSyncTime(next.syncScheduleTime);
+  next.passwordMaxAgeDays = normalizePasswordMaxAge(next.passwordMaxAgeDays);
+  next.trashRetentionDays = normalizeTrashRetention(next.trashRetentionDays);
+  next.webdavAutoBackup = Boolean(next.webdavAutoBackup);
+  next.webdavAutoBackupHours = normalizeAutoBackupHours(next.webdavAutoBackupHours);
+  next.webdavKeepCopies = normalizeKeepCopies(next.webdavKeepCopies);
+  next.webdavArchiveDays = normalizeArchiveDays(next.webdavArchiveDays);
   next.syncTransport = 'host';
   next.uiLanguage = normalizeUiLanguage(next.uiLanguage);
   settingsCache = next;
@@ -782,6 +848,7 @@ async function loadSession() {
         : await decryptJSON(key, blob.box, AAD);
       if (!data || !Array.isArray(data.entries)) throw new Error('invalid vault');
       if (!Array.isArray(data.profiles)) data.profiles = [];
+      if (!Array.isArray(data.trash)) data.trash = [];
       session = {
         key,
         keyJwk: meta.keyJwk,
@@ -794,6 +861,13 @@ async function loadSession() {
       };
       scheduleAutoLock();
       await ensureEntryTimes();
+      if (pruneTrash(data, settingsCache?.trashRetentionDays)) {
+        try {
+          await saveVault();
+        } catch {
+          /* pruning is best-effort; never block unlocking on it */
+        }
+      }
       return true;
     } catch {
       await removeSessionArea(STORAGE.session);
@@ -956,6 +1030,7 @@ function syncStateInfo() {
   const transport = 'host';
   const configured = true;
   if (syncInfo.conflict) state = 'conflict';
+  else if (syncInfo.identityMismatch) state = 'identity_mismatch';
   else if (syncInfo.busy) state = 'syncing';
   else if (!syncInfo.available) state = 'unavailable';
   else if (!syncInfo.joined) state = 'not_joined';
@@ -992,6 +1067,7 @@ async function syncRequest(type, payload = {}, timeout = 8000, override = null) 
       vault: payload.vault,
       settings: payload.settings,
       ignores: payload.ignores,
+      backupName: payload.backupName || '',
     }, limit);
   }
   throw new Error('未知的同步操作');
@@ -1007,6 +1083,7 @@ async function persistSyncMeta() {
       lastError: syncInfo.lastError,
       lastErrorCode: syncInfo.lastErrorCode,
       conflict: syncInfo.conflict,
+      identityMismatch: Boolean(syncInfo.identityMismatch),
       baseRevision: syncBaseRevision,
       etag: syncInfo.etag || '',
       failures: syncInfo.failures,
@@ -1020,6 +1097,7 @@ async function persistSyncMeta() {
 async function markSyncSuccess(direction) {
   syncInfo.joined = true;
   syncInfo.busy = false;
+  syncInfo.identityMismatch = false;
   syncInfo.lastSyncAt = Date.now();
   syncInfo.lastDirection = direction;
   syncInfo.lastError = '';
@@ -1033,6 +1111,7 @@ async function markSyncSuccess(direction) {
 
 function classifySyncError(error) {
   const raw = String(error?.message || error || '同步失败');
+  if (/不是同一个/.test(raw)) return { code: 'vault_identity', message: IDENTITY_MISMATCH_MESSAGE };
   if (/connectNative|not supported|不支持本机同步|宿主已断开|not found|Access is denied|找不到/i.test(raw)) {
     return { code: 'host_unavailable', message: '未检测到本机同步宿主，请安装宿主后重启浏览器' };
   }
@@ -1052,8 +1131,13 @@ function setSyncError(error) {
   syncInfo.busy = false;
   syncInfo.lastErrorCode = code;
   syncInfo.lastError = message;
+  syncInfo.identityMismatch = code === 'vault_identity';
   syncInfo.failures = Math.min(10, (Number(syncInfo.failures) || 0) + 1);
-  const delay = Math.min(30 * 60 * 1000, 15_000 * 2 ** (syncInfo.failures - 1));
+  // A vault-identity mismatch never resolves on its own, so stop retrying in a
+  // tight loop; only a manual sync (or a changed remote) re-checks it.
+  const delay = syncInfo.identityMismatch
+    ? 10 * 60 * 1000
+    : Math.min(30 * 60 * 1000, 15_000 * 2 ** (syncInfo.failures - 1));
   syncInfo.retryAt = Date.now() + delay;
   void persistSyncMeta();
   broadcastSync();
@@ -1214,6 +1298,7 @@ async function unlockWithDevice(vaultId = activeVaultId, credentialId = '') {
   const data = await decryptPayload(key, blob.box);
   if (!data || !Array.isArray(data.entries)) throw new Error('密码库数据无效');
   if (!Array.isArray(data.profiles)) data.profiles = [];
+  if (!Array.isArray(data.trash)) data.trash = [];
   const keyJwk = await exportKeyJwk(key);
   session = {
     key,
@@ -1293,6 +1378,9 @@ async function readMigrationBackup(vaultId = activeVaultId) {
 async function decryptVaultBlob(blob, password, keyFileBase64 = '') {
   const kdf = blob?.kdf || {};
   if (!kdf.salt) throw new Error('同步数据缺少加密参数');
+  if (blob?.keyFile && !keyFileBase64) {
+    throw new Error('该密码库启用了密钥文件，请选择对应的密钥文件后再试');
+  }
   if (blob?.cipher && blob.cipher !== VAULT_CIPHER) {
     throw new Error('密码库使用了不受支持的加密算法');
   }
@@ -1431,6 +1519,27 @@ async function applyRemotePayload(payload, key, data, kdf) {
   await broadcastVaultUnlocked();
 }
 
+const IDENTITY_MISMATCH_MESSAGE = '远端密码库与当前密码库不是同一个，已停止同步以免互相覆盖；请先导出备份，再决定保留哪一份';
+
+/**
+ * A first sync from a device that never synced before must not overwrite a
+ * vault another browser created. Both blobs carry the creation timestamp of
+ * the vault they belong to, which survives every save and every sync, so it
+ * identifies the vault without decrypting anything.
+ */
+function vaultIdentity(blob) {
+  return Number(blob?.createdAt) || 0;
+}
+
+async function remoteVaultDiffers(localBlob) {
+  const local = vaultIdentity(localBlob);
+  if (!local) return false;
+  const probe = await syncRequest('pull');
+  if (!probe.exists) return false;
+  const remote = vaultIdentity(probe.vault);
+  return Boolean(remote) && remote !== local;
+}
+
 async function pullAndApplyRemote() {
   const payload = await syncRequest('pull');
   if (!payload.exists) return { exists: false };
@@ -1441,7 +1550,15 @@ async function pullAndApplyRemote() {
     // The payload key is wrapped in the remote blob; any device that already
     // unlocked this vault holds the same VaultKey, so a password change on the
     // other device only changes the wrapper, not this decryption path.
-    data = await decryptPayload(session.key, payload.vault.box);
+    try {
+      data = await decryptPayload(session.key, payload.vault.box);
+    } catch {
+      // Same format but a different VaultKey: the remote blob is a different
+      // vault that replaced ours (for example after a host data folder change).
+      // Say so plainly instead of blaming the master password, and never push
+      // our copy over it.
+      throw new Error(IDENTITY_MISMATCH_MESSAGE);
+    }
   } else {
     if (session.kdf?.salt !== payload.vault?.kdf?.salt) {
       throw new Error('同步密码库与当前主密码不匹配，请重新同步');
@@ -1574,6 +1691,10 @@ async function syncPoll({ force = false } = {}) {
         syncInfo.busy = false;
         return { conflict: true, ...syncStatusPayload() };
       }
+      if (!syncBaseRevision && await remoteVaultDiffers(localBlob)) {
+        setSyncError(new Error(IDENTITY_MISMATCH_MESSAGE));
+        return { skipped: true, reason: 'identity', ...syncStatusPayload() };
+      }
       syncBaseRevision = hostRevision;
       const pushed = await pushLocalVault();
       if (pushed?.conflict) {
@@ -1666,6 +1787,10 @@ async function reconcileSyncAfterUnlock() {
     const localUpdated = Number(localBlob?.updatedAt) || 0;
     const hostUpdated = Number(status.updatedAt) || 0;
     if (syncDirty || localUpdated > hostUpdated + 1000) {
+      if (!syncBaseRevision && await remoteVaultDiffers(localBlob)) {
+        setSyncError(new Error(IDENTITY_MISMATCH_MESSAGE));
+        return { skipped: true, reason: 'identity', ...syncStatusPayload() };
+      }
       const pushed = await pushLocalVault();
       if (pushed?.conflict) {
         syncInfo.busy = false;
@@ -1733,8 +1858,19 @@ async function syncPullWithPassword(password, keyFileBase64 = '', webdav = null)
   return { count: data.entries.length, revision: syncBaseRevision };
 }
 
+function webdavBackupFileName(now = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `subvault-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-`
+    + `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.json`;
+}
+
 async function webdavBackupNow(sender) {
   if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
+  return runWebdavBackup();
+}
+
+/** Shared by the manual button and the auto-backup alarm (no sender check). */
+async function runWebdavBackup() {
   const s = await requireUnlocked();
   const config = webdavConfig();
   if (!config) throw new Error('请先配置 WebDAV 备份');
@@ -1745,12 +1881,14 @@ async function webdavBackupNow(sender) {
     settings: backupSettingsSnapshot(),
     ignores: await readLocal(STORAGE.ignores, []),
   };
+  const backupName = webdavBackupFileName();
   const result = await syncRequest(
     'publish',
     {
       ...payload,
       baseRevision: status.revision || 0,
       etag: status.etag || '',
+      backupName,
     },
     30000,
     config,
@@ -1762,10 +1900,103 @@ async function webdavBackupNow(sender) {
   const meta = {
     at: Date.now(),
     revision: Number(result.revision) || 0,
+    name: String(result.name || backupName),
     error: '',
   };
   await writeLocal(STORAGE.webdavBackupMeta, meta);
-  return { ok: true, revision: meta.revision, at: meta.at };
+  syncInfo.lastBackupAt = meta.at;
+  return {
+    ok: true,
+    revision: meta.revision,
+    at: meta.at,
+    name: meta.name,
+    archiveError: String(result.archiveError || ''),
+  };
+}
+
+async function webdavHistory(sender) {
+  if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
+  await requireUnlocked();
+  const config = webdavConfig();
+  if (!config) throw new Error('请先配置 WebDAV 备份');
+  const result = await nativeRequest('webdav-history', { config, vaultId: activeVaultId }, 20000);
+  if (!result.ok) throw new Error(result.error || '无法读取 WebDAV 历史副本');
+  return {
+    ok: true,
+    archives: Array.isArray(result.archives) ? result.archives : [],
+    count: Number(result.count) || 0,
+  };
+}
+
+async function webdavPruneNow(sender, options = {}) {
+  if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
+  return runWebdavPrune(options);
+}
+
+/** Shared by the manual button and auto-retention (no sender check). */
+async function runWebdavPrune(options = {}) {
+  await requireUnlocked();
+  const config = webdavConfig();
+  if (!config) throw new Error('请先配置 WebDAV 备份');
+  const keep = Math.max(0, Math.min(200, Math.floor(Number(options.keep) || 0)));
+  const olderThanDays = Math.max(0, Math.min(3650, Math.floor(Number(options.olderThanDays) || 0)));
+  const result = await nativeRequest(
+    'webdav-prune',
+    { config, vaultId: activeVaultId, keep, olderThanDays },
+    30000,
+  );
+  if (!result.ok) throw new Error(result.error || '清理 WebDAV 历史副本失败');
+  return {
+    ok: true,
+    deleted: Array.isArray(result.deleted) ? result.deleted : [],
+    failures: Array.isArray(result.failures) ? result.failures : [],
+    remaining: Number(result.remaining) || 0,
+    skipped: String(result.skipped || ''),
+  };
+}
+
+/** Auto backup + retention; both are opt-in and never run while locked. */
+async function webdavAutoBackupTick({ force = false } = {}) {
+  await getSettings();
+  const settings = settingsCache || {};
+  if (!settings.webdavAutoBackup) return { skipped: 'disabled' };
+  if (!session) return { skipped: 'locked' };
+  const config = webdavConfig();
+  if (!config) return { skipped: 'unconfigured' };
+  const hours = normalizeAutoBackupHours(settings.webdavAutoBackupHours);
+  const gap = hours * 3600_000;
+  const last = Number(syncInfo.lastBackupAt) || 0;
+  if (!force && last && Date.now() - last < gap) return { skipped: 'not-due' };
+  const result = await runWebdavBackup();
+  let pruned = null;
+  try {
+    pruned = await runWebdavPrune({
+      keep: normalizeKeepCopies(settings.webdavKeepCopies),
+      olderThanDays: normalizeArchiveDays(settings.webdavArchiveDays),
+    });
+  } catch (error) {
+    pruned = { error: error?.message || '清理历史副本失败' };
+  }
+  return { ...result, pruned };
+}
+
+/** Keep one periodic alarm in sync with the configured interval. */
+async function scheduleWebdavAutoBackup() {
+  const settings = await getSettings();
+  try {
+    if (!settings.webdavAutoBackup) {
+      await chrome.alarms.clear(WEBDAV_BACKUP_ALARM);
+      return { scheduled: false };
+    }
+    const hours = normalizeAutoBackupHours(settings.webdavAutoBackupHours);
+    await chrome.alarms.create(WEBDAV_BACKUP_ALARM, {
+      delayInMinutes: hours * 60,
+      periodInMinutes: hours * 60,
+    });
+    return { scheduled: true, hours };
+  } catch {
+    return { scheduled: false };
+  }
 }
 
 async function webdavRestoreBackup(password, keyFileBase64, sender) {
@@ -1788,11 +2019,21 @@ async function webdavRestoreBackup(password, keyFileBase64, sender) {
 async function webdavBackupStatus() {
   const meta = await readLocal(STORAGE.webdavBackupMeta, null);
   const config = session?.data?.webdav || null;
+  const settings = await getSettings();
   return {
     configured: Boolean(config?.url),
     lastBackupAt: Number(meta?.at) || 0,
     lastRevision: Number(meta?.revision) || 0,
+    lastName: meta?.name || '',
     lastError: meta?.error || '',
+    autoBackup: Boolean(settings.webdavAutoBackup),
+    autoBackupHours: settings.webdavAutoBackupHours,
+    keepCopies: settings.webdavKeepCopies,
+    archiveDays: settings.webdavArchiveDays,
+    nextAutoBackupAt:
+      settings.webdavAutoBackup && Number(meta?.at)
+        ? Number(meta.at) + settings.webdavAutoBackupHours * 3600_000
+        : 0,
   };
 }
 
@@ -1938,6 +2179,8 @@ function normalizeEntryInput(input, hostOverride = '') {
   let totpDigits = 6;
   let totpPeriod = 30;
   let totpAlgorithm = 'SHA1';
+  let totpType = 'totp';
+  let totpCounter = 0;
   if (rawTotp) {
     const parsedOtp = parseOtpAuthUri(rawTotp);
     const candidate = parsedOtp?.secret || rawTotp;
@@ -1945,17 +2188,22 @@ function normalizeEntryInput(input, hostOverride = '') {
     totpSecret = normalizeTotpSecret(candidate);
     if (totpSecret.length > LIMITS.totp) throw new Error('TOTP secret is too long');
     if (parsedOtp) {
+      totpType = OTP_TYPES.includes(parsedOtp.type) ? parsedOtp.type : 'totp';
       totpDigits = parsedOtp.digits;
       totpPeriod = parsedOtp.period;
       totpAlgorithm = parsedOtp.algorithm;
+      totpCounter = parsedOtp.counter || 0;
     } else {
-      totpDigits = Number(input.totpDigits) === 8 ? 8 : 6;
+      const requestedType = String(input.totpType || '').toLowerCase();
+      totpType = OTP_TYPES.includes(requestedType) ? requestedType : 'totp';
+      totpDigits = totpType === 'steam' ? 5 : Number(input.totpDigits) === 8 ? 8 : 6;
       totpPeriod = Math.min(300, Math.max(10, Number(input.totpPeriod) || 30));
       totpAlgorithm = ['SHA1', 'SHA256', 'SHA512'].includes(
         String(input.totpAlgorithm || '').toUpperCase(),
       )
         ? String(input.totpAlgorithm).toUpperCase()
         : 'SHA1';
+      totpCounter = Math.max(0, Math.floor(Number(input.totpCounter) || 0));
     }
   }
 
@@ -1977,6 +2225,8 @@ function normalizeEntryInput(input, hostOverride = '') {
     totpDigits,
     totpPeriod,
     totpAlgorithm,
+    totpType,
+    totpCounter,
     favorite: Boolean(input.favorite),
     tags: normalizeTags(input.tags),
     folder: clampText(input.folder, 80).trim(),
@@ -2045,6 +2295,50 @@ function findEntriesForHost(host, port = '') {
 function findEntry(id) {
   if (!session) return null;
   return session.data.entries.find((entry) => entry.id === id) || null;
+}
+
+const TRASH_LIMIT = 100;
+
+function moveEntriesToTrash(data, entries) {
+  if (!Array.isArray(data.trash)) data.trash = [];
+  const removed = new Set(entries.map((entry) => entry.id));
+  data.entries = data.entries.filter((entry) => !removed.has(entry.id));
+  const deletedAt = Date.now();
+  const items = entries.map((entry) => ({
+    id: randomId(),
+    entry,
+    deletedAt,
+  }));
+  data.trash = [...items, ...data.trash].slice(0, TRASH_LIMIT);
+  return items.map((item) => item.id);
+}
+
+/**
+ * Drop trashed entries older than the configured retention window. Returns the
+ * number of removed items so callers can persist only when something changed.
+ */
+function pruneTrash(data, retentionDays) {
+  if (!Array.isArray(data?.trash) || !data.trash.length) return 0;
+  const days = normalizeTrashRetention(retentionDays);
+  if (days <= 0) return 0;
+  const cutoff = Date.now() - days * 86_400_000;
+  const kept = data.trash.filter((item) => (Number(item?.deletedAt) || 0) >= cutoff);
+  const removed = data.trash.length - kept.length;
+  if (removed > 0) data.trash = kept;
+  return removed;
+}
+
+function trashSummary(item) {
+  const entry = item?.entry || {};
+  return {
+    id: item.id,
+    title: entry.title || '',
+    host: entry.host || '',
+    username: entry.username || '',
+    deletedAt: Number(item.deletedAt) || 0,
+    hasTotp: Boolean(entry.totpSecret),
+    hasPasskey: Boolean(entry.passkey?.credentialId || entry.passkey?.rpId),
+  };
 }
 
 function pushPasswordHistory(entry) {
@@ -2386,7 +2680,7 @@ async function setupVault(password, keyFileBase64 = '', name = '默认密码库'
   const key = await createVaultKey();
   const wrappedKey = await wrapVaultKey(kek, key);
   const now = Date.now();
-  const data = { version: VAULT_VERSION, entries: [], profiles: [], createdAt: now, updatedAt: now };
+  const data = { version: VAULT_VERSION, entries: [], profiles: [], trash: [], createdAt: now, updatedAt: now };
   const box = await encryptPayload(key, data);
   const blob = {
     v: VAULT_FORMAT_VERSION,
@@ -2439,7 +2733,7 @@ async function createVault(name, password, keyFileBase64 = '', sender = null) {
   const key = await createVaultKey();
   const wrappedKey = await wrapVaultKey(kek, key);
   const now = Date.now();
-  const data = { version: VAULT_VERSION, entries: [], profiles: [], createdAt: now, updatedAt: now };
+  const data = { version: VAULT_VERSION, entries: [], profiles: [], trash: [], createdAt: now, updatedAt: now };
   const box = await encryptPayload(key, data);
   await writeLocal(`vault:${id}`, {
     v: VAULT_FORMAT_VERSION,
@@ -2687,6 +2981,7 @@ async function unlockVault(password, keyFileBase64 = '', vaultId = '') {
     lastSessionPersist = 0;
     failedUnlocks = 0;
     await ensureEntryTimes();
+    if (pruneTrash(data, settingsCache?.trashRetentionDays)) await saveVault();
     await persistSession();
     scheduleAutoLock();
     await refreshBadge();
@@ -2772,10 +3067,14 @@ const RESTORE_SETTING_KEYS = [
   'autoOpenOnFocus',
   'allowSequenceSubmit',
   'privacyShieldOnBlur',
+  'otpToastSeconds',
   'savePrompt',
   'savePromptPosition',
   'theme',
   'material',
+  'accentColor',
+  'glassStrength',
+  'uiRadius',
   'showIcon',
   'takeoverMode',
   'clearNativeAutofill',
@@ -2805,6 +3104,10 @@ function normalizeRestoredSettings(input) {
   const clipboard = Number(input.clipboardClearSeconds);
   if (Number.isFinite(clipboard) && clipboard >= 0 && clipboard <= 600) {
     output.clipboardClearSeconds = Math.round(clipboard);
+  }
+  const otpSeconds = Number(input.otpToastSeconds);
+  if (Number.isFinite(otpSeconds) && otpSeconds >= 1 && otpSeconds <= 60) {
+    output.otpToastSeconds = Math.round(otpSeconds);
   }
   for (const key of [
     'autoFill',
@@ -2840,6 +3143,18 @@ function normalizeRestoredSettings(input) {
   if (input.material !== undefined) {
     const materials = ['solid', 'glass', 'liquid'];
     if (materials.includes(input.material)) output.material = input.material;
+  }
+  if (input.accentColor !== undefined) {
+    const accents = ['indigo', 'ocean', 'emerald', 'rose', 'amber', 'violet'];
+    if (accents.includes(input.accentColor)) output.accentColor = input.accentColor;
+  }
+  if (input.glassStrength !== undefined) {
+    const strengths = ['soft', 'strong', 'ultra'];
+    if (strengths.includes(input.glassStrength)) output.glassStrength = input.glassStrength;
+  }
+  if (input.uiRadius !== undefined) {
+    const radii = ['soft', 'round', 'square'];
+    if (radii.includes(input.uiRadius)) output.uiRadius = input.uiRadius;
   }
   if (input.kdfAlgorithm !== undefined) {
     const algos = ['argon2id', 'pbkdf2'];
@@ -3212,6 +3527,18 @@ async function handleMessage(message, sender) {
     case 'SV_WEBDAV_BACKUP_STATUS':
       return { ok: true, ...(await webdavBackupStatus()) };
 
+    case 'SV_WEBDAV_HISTORY':
+      return webdavHistory(sender);
+
+    case 'SV_WEBDAV_PRUNE':
+      return webdavPruneNow(sender, {
+        keep: message.keep,
+        olderThanDays: message.olderThanDays,
+      });
+
+    case 'SV_WEBDAV_BACKUP_RUN':
+      return webdavAutoBackupTick({ force: message.force !== false });
+
     case 'SV_WEBDAV_RESTORE': {
       return webdavRestoreBackup(
         String(message.password || ''),
@@ -3480,11 +3807,7 @@ async function handleMessage(message, sender) {
       let totpCode = '';
       if (entry.totpSecret) {
         try {
-          const totp = await generateTotp(entry.totpSecret, {
-            digits: entry.totpDigits,
-            period: entry.totpPeriod,
-            algorithm: entry.totpAlgorithm,
-          });
+          const totp = await generateOtpForEntry(entry);
           totpCode = totp.code;
         } catch {
           /* a malformed legacy secret should not block password fill */
@@ -3640,7 +3963,7 @@ async function handleMessage(message, sender) {
       });
       return {
         bytes,
-        quota: Number(chrome.storage.local.QUOTA_BYTES) || 10 * 1024 * 1024,
+        quota: 50 * 1024 * 1024,
         entries: session.data.entries.length,
       };
     }
@@ -3723,6 +4046,7 @@ async function handleMessage(message, sender) {
         counts.set(entry.password, (counts.get(entry.password) || 0) + 1);
       }
       const now = Date.now();
+      const maxAgeDays = normalizePasswordMaxAge(settingsCache?.passwordMaxAgeDays);
       const weakPasswords = new Map();
       const isWeak = async (password) => {
         const key = String(password || '');
@@ -3741,7 +4065,7 @@ async function handleMessage(message, sender) {
         info.weak = await isWeak(entry.password);
         info.reused = (counts.get(entry.password) || 0) > 1;
         info.ageDays = Math.max(0, Math.floor((now - entryTime(entry)) / 86_400_000));
-        info.old = info.ageDays > 365;
+        info.old = maxAgeDays > 0 && info.ageDays > maxAgeDays;
         info.http = /^http:\/\//i.test(entry.url || '');
         entries.push(info);
       }
@@ -3754,6 +4078,8 @@ async function handleMessage(message, sender) {
           reused: entries.filter((entry) => entry.reused).length,
           old: entries.filter((entry) => entry.old).length,
           http: entries.filter((entry) => entry.http).length,
+          maxAgeDays,
+          trash: Array.isArray(s.data.trash) ? s.data.trash.length : 0,
           totp: entries.filter((entry) => entry.hasTotp).length,
           favorite: entries.filter((entry) => entry.favorite).length,
           updatedAt: s.data.updatedAt || 0,
@@ -3806,6 +4132,8 @@ async function handleMessage(message, sender) {
           totpDigits: entry.totpDigits || 6,
           totpPeriod: entry.totpPeriod || 30,
           totpAlgorithm: entry.totpAlgorithm || 'SHA1',
+          totpType: entry.totpType || 'totp',
+          totpCounter: entry.totpCounter || 0,
           tags: Array.isArray(entry.tags) ? entry.tags : [],
           folder: entry.folder || '',
           favorite: Boolean(entry.favorite),
@@ -3838,6 +4166,8 @@ async function handleMessage(message, sender) {
         totpDigits: entry.totpDigits || 6,
         totpPeriod: entry.totpPeriod || 30,
         totpAlgorithm: entry.totpAlgorithm || 'SHA1',
+        totpType: entry.totpType || 'totp',
+        totpCounter: entry.totpCounter || 0,
         favorite: Boolean(entry.favorite),
         tags: Array.isArray(entry.tags) ? entry.tags : [],
         folder: entry.folder || '',
@@ -3880,12 +4210,30 @@ async function handleMessage(message, sender) {
       return enqueue(async () => {
         const s = await requireUnlocked();
         const ids = new Set(Array.isArray(message.ids) ? message.ids : []);
-        const before = s.data.entries.length;
-        s.data.entries = s.data.entries.filter((entry) => !ids.has(entry.id));
-        const deleted = before - s.data.entries.length;
-        if (deleted) await saveVault();
-        return { deleted };
+        const removed = s.data.entries.filter((entry) => ids.has(entry.id));
+        const trashIds = moveEntriesToTrash(s.data, removed);
+        if (removed.length) await saveVault();
+        return { deleted: removed.length, trashIds };
       });
+    }
+
+    case 'SV_GET_SITE_TOTP': {
+      if (!isContentContext(sender)) throw new Error('该操作仅支持网页页面');
+      await requireUnlocked();
+      const host = await requireContentHost(sender);
+      // HOTP is counter-based: auto-showing it would silently desync the counter.
+      const entry = findEntriesForHost(host, senderPort(sender)).find(
+        (item) => item.totpSecret && (item.totpType || 'totp') !== 'hotp',
+      );
+      if (!entry) return { ok: false };
+      const result = await generateOtpForEntry(entry);
+      return {
+        ok: true,
+        id: entry.id,
+        title: entry.title || entry.host,
+        username: entry.username || '',
+        ...result,
+      };
     }
 
     case 'SV_GET_TOTP_CODE': {
@@ -3893,14 +4241,25 @@ async function handleMessage(message, sender) {
       await requireUnlocked();
       const entry = findEntry(message.id);
       if (!entry) throw new Error('账号不存在');
-      if (!entry.totpSecret) throw new Error('该账号没有配置 TOTP');
-      const result = await generateTotp(entry.totpSecret, {
-        digits: entry.totpDigits,
-        period: entry.totpPeriod,
-        algorithm: entry.totpAlgorithm,
-      });
+      if (!entry.totpSecret) throw new Error('该账号没有配置动态码');
+      const isHotp = (entry.totpType || 'totp') === 'hotp';
+      const counter = Number.isFinite(message.counter)
+        ? Math.max(0, Math.floor(message.counter))
+        : Number(entry.totpCounter) || 0;
+      const result = await generateOtpForEntry(entry, { counter });
+      if (isHotp && message.advance) {
+        await enqueue(async () => {
+          const s = await requireUnlocked();
+          const target = s.data.entries.find((item) => item.id === entry.id);
+          if (!target) return;
+          target.totpCounter = counter + 1;
+          target.updatedAt = Date.now();
+          await saveVault();
+        });
+      }
       return {
         ...result,
+        type: isHotp ? 'hotp' : result.type,
         title: entry.title,
         username: entry.username || '',
       };
@@ -4002,11 +4361,50 @@ async function handleMessage(message, sender) {
       if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
       return enqueue(async () => {
         const s = await requireUnlocked();
-        const index = s.data.entries.findIndex((entry) => entry.id === message.id);
-        if (index === -1) throw new Error('账号不存在');
-        s.data.entries.splice(index, 1);
+        const entry = s.data.entries.find((item) => item.id === message.id);
+        if (!entry) throw new Error('账号不存在');
+        const [trashId] = moveEntriesToTrash(s.data, [entry]);
         await saveVault();
-        return { deleted: true };
+        return { deleted: true, trashId };
+      });
+    }
+
+    case 'SV_LIST_TRASH': {
+      if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
+      const s = await requireUnlocked();
+      const items = (Array.isArray(s.data.trash) ? s.data.trash : [])
+        .map(trashSummary)
+        .sort((a, b) => b.deletedAt - a.deletedAt);
+      return { items, count: items.length };
+    }
+
+    case 'SV_RESTORE_TRASH': {
+      if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
+      return enqueue(async () => {
+        const s = await requireUnlocked();
+        const trash = Array.isArray(s.data.trash) ? s.data.trash : [];
+        const index = trash.findIndex((item) => item.id === message.id);
+        if (index === -1) throw new Error('回收站中没有该账号');
+        const [item] = trash.splice(index, 1);
+        const entry = { ...item.entry };
+        if (s.data.entries.some((existing) => existing.id === entry.id)) {
+          entry.id = randomId();
+        }
+        entry.updatedAt = Date.now();
+        s.data.entries.push(entry);
+        await saveVault();
+        return { restored: true, id: entry.id, host: entry.host };
+      });
+    }
+
+    case 'SV_EMPTY_TRASH': {
+      if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
+      return enqueue(async () => {
+        const s = await requireUnlocked();
+        const count = Array.isArray(s.data.trash) ? s.data.trash.length : 0;
+        s.data.trash = [];
+        if (count) await saveVault();
+        return { emptied: count };
       });
     }
 
@@ -4150,11 +4548,15 @@ async function handleMessage(message, sender) {
       if (!isExtensionPage(sender)) throw new Error('仅扩展页面可执行该操作');
       await requireUnlocked();
       const backupPassword = String(message.backupPassword || '');
+      const backupKeyFile = String(message.keyFileBase64 || '');
       if (backupPassword) {
         if (backupPassword.length < 10) throw new Error('备份密码至少需要 10 个字符');
         if (isCommonPassword(backupPassword)) {
           throw new Error('该备份密码太常见，请更换一个更安全的密码');
         }
+      }
+      if (backupKeyFile && !backupPassword) {
+        throw new Error('启用密钥文件时必须同时填写独立备份密码');
       }
 
       const payload = {
@@ -4171,11 +4573,16 @@ async function handleMessage(message, sender) {
       }
       let kdf;
       let wrappedKey = null;
+      let backupKeyFingerprint = '';
+      if (backupKeyFile) backupKeyFingerprint = (await sha256Hex(backupKeyFile)).slice(0, 16);
       if (session.wrappedKey) {
         if (backupPassword) {
           kdf = preferredKdfParams();
           if (expiresAt) kdf = await bindKdfToExpiry(kdf, expiresAt);
-          const backupKek = await deriveKeyFromKdf(backupPassword, kdf);
+          const backupKek = await deriveKeyFromKdf(
+            await effectivePassword(backupPassword, backupKeyFile),
+            kdf,
+          );
           wrappedKey = await wrapVaultKey(backupKek, session.key);
         } else {
           kdf = session.kdf;
@@ -4183,24 +4590,25 @@ async function handleMessage(message, sender) {
         }
         const aad = expiresAt ? `${AAD_BACKUP_V5}:${expiresAt}` : AAD_BACKUP_V4;
         const box = await encryptJSON(session.key, payload, aad);
+        const record = {
+          app: 'SubVault',
+          format: 'subvault-backup',
+          version: expiresAt ? BACKUP_VERSION_EXPIRY : BACKUP_VERSION,
+          mode,
+          exportedAt: Date.now(),
+          ...(expiresAt ? { expiresAt } : {}),
+          entryCount: session.data.entries.length,
+          includesSettings: true,
+          kdf,
+          wrappedKey,
+          box,
+          ...(backupKeyFile
+            ? { keyFile: true, keyFileFingerprint: backupKeyFingerprint }
+            : {}),
+        };
         return {
-          backup: JSON.stringify(
-            {
-              app: 'SubVault',
-              format: 'subvault-backup',
-              version: expiresAt ? BACKUP_VERSION_EXPIRY : BACKUP_VERSION,
-              mode,
-              exportedAt: Date.now(),
-              ...(expiresAt ? { expiresAt } : {}),
-              entryCount: session.data.entries.length,
-              includesSettings: true,
-              kdf,
-              wrappedKey,
-              box,
-            },
-            null,
-            2,
-          ),
+          backupBase64: bytesToBase64(await packContainer(record)),
+          encoding: 'svbak',
           count: session.data.entries.length,
           independent: Boolean(backupPassword),
         };
@@ -4210,26 +4618,30 @@ async function handleMessage(message, sender) {
       const key = backupPassword ? null : session.key;
       const legacyKdf = backupPassword ? preferredKdfParams() : session.kdf;
       const legacyKey = backupPassword
-        ? await deriveKeyFromKdf(backupPassword, legacyKdf)
+        ? await deriveKeyFromKdf(
+            await effectivePassword(backupPassword, backupKeyFile),
+            legacyKdf,
+          )
         : key;
       const box = await encryptJSON(legacyKey, payload, AAD_BACKUP_V3);
 
+      const legacyRecord = {
+        app: 'SubVault',
+        format: 'subvault-backup',
+        version: 3,
+        mode,
+        exportedAt: Date.now(),
+        entryCount: session.data.entries.length,
+        includesSettings: true,
+        kdf: legacyKdf,
+        box,
+        ...(backupKeyFile
+          ? { keyFile: true, keyFileFingerprint: backupKeyFingerprint }
+          : {}),
+      };
       return {
-        backup: JSON.stringify(
-          {
-            app: 'SubVault',
-            format: 'subvault-backup',
-            version: 3,
-            mode,
-            exportedAt: Date.now(),
-            entryCount: session.data.entries.length,
-            includesSettings: true,
-            kdf: legacyKdf,
-            box,
-          },
-          null,
-          2,
-        ),
+        backupBase64: bytesToBase64(await packContainer(legacyRecord)),
+        encoding: 'svbak',
         count: session.data.entries.length,
         independent: Boolean(backupPassword),
       };
@@ -4240,9 +4652,11 @@ async function handleMessage(message, sender) {
       await requireUnlocked();
       let parsed;
       try {
-        parsed = JSON.parse(String(message.text || ''));
-      } catch {
-        throw new Error('备份文件不是有效的 JSON');
+        parsed = message.text
+          ? await unpackContainer(new TextEncoder().encode(String(message.text)))
+          : await unpackContainer(base64ToBytes(String(message.base64 || '')));
+      } catch (error) {
+        throw new Error(error?.message || '备份文件无法读取');
       }
 
       const isV5 =
@@ -4265,23 +4679,34 @@ async function handleMessage(message, sender) {
         parsed?.kdf;
       if (isV5 || isV4 || isV3) {
         const password = String(message.password || '');
+        const keyFileBase64 = String(message.keyFileBase64 || '');
         if (!password) throw new Error('请输入该备份文件的密码（独立备份密码或主密码）');
+        if (parsed.keyFile && !keyFileBase64) {
+          throw new Error('该备份文件需要配套的密钥文件才能解密');
+        }
+        if (parsed.keyFile && parsed.keyFileFingerprint) {
+          const actual = (await sha256Hex(keyFileBase64)).slice(0, 16);
+          if (actual !== String(parsed.keyFileFingerprint)) {
+            throw new Error('密钥文件与该备份文件不匹配');
+          }
+        }
+        const effective = await effectivePassword(password, keyFileBase64);
         let payload;
         if (isV5) {
           const expiresAt = Number(parsed.expiresAt);
           if (Date.now() > expiresAt) throw new Error('备份文件已过期，无法解密');
-          const kek = await deriveKeyFromKdf(password, parsed.kdf);
+          const kek = await deriveKeyFromKdf(effective, parsed.kdf);
           const vaultKey = await unwrapVaultKey(kek, parsed.wrappedKey);
           payload = await decryptJSON(vaultKey, parsed.box, `${AAD_BACKUP_V5}:${expiresAt}`);
           if (Number(payload?.expiresAt) !== expiresAt) {
             throw new Error('备份有效期校验失败，文件可能已被修改');
           }
         } else if (isV4) {
-          const kek = await deriveKeyFromKdf(password, parsed.kdf);
+          const kek = await deriveKeyFromKdf(effective, parsed.kdf);
           const vaultKey = await unwrapVaultKey(kek, parsed.wrappedKey);
           payload = await decryptJSON(vaultKey, parsed.box, AAD_BACKUP_V4);
         } else {
-          const key = await deriveKeyFromKdf(password, parsed.kdf);
+          const key = await deriveKeyFromKdf(effective, parsed.kdf);
           payload = await decryptJSON(key, parsed.box, AAD_BACKUP_V3);
         }
         const data = payload?.data;
@@ -4410,6 +4835,13 @@ async function handleMessage(message, sender) {
         }
         next.autoLockMinutes = Math.round(minutes);
       }
+      if (patch.otpToastSeconds !== undefined) {
+        const seconds = Number(patch.otpToastSeconds);
+        if (!Number.isFinite(seconds) || seconds < 1 || seconds > 60) {
+          throw new Error('动态码提示时长需在 1–60 秒之间');
+        }
+        next.otpToastSeconds = Math.round(seconds);
+      }
       if (patch.clipboardClearSeconds !== undefined) {
         const seconds = Number(patch.clipboardClearSeconds);
         if (!Number.isFinite(seconds) || seconds < 0 || seconds > 600) {
@@ -4443,6 +4875,41 @@ async function handleMessage(message, sender) {
       if (patch.syncScheduleTime !== undefined) {
         next.syncScheduleTime = normalizeSyncTime(patch.syncScheduleTime);
       }
+      if (patch.webdavAutoBackupHours !== undefined) {
+        const hours = Number(patch.webdavAutoBackupHours);
+        if (!Number.isFinite(hours) || hours < 1 || hours > 168) {
+          throw new Error('自动备份间隔需在 1–168 小时之间');
+        }
+        next.webdavAutoBackupHours = Math.round(hours);
+      }
+      if (patch.webdavKeepCopies !== undefined) {
+        const keep = Number(patch.webdavKeepCopies);
+        if (!Number.isFinite(keep) || keep < 0 || keep > 200) {
+          throw new Error('保留份数需在 0–200 之间');
+        }
+        next.webdavKeepCopies = Math.round(keep);
+      }
+      if (patch.webdavArchiveDays !== undefined) {
+        const days = Number(patch.webdavArchiveDays);
+        if (!Number.isFinite(days) || days < 0 || days > 3650) {
+          throw new Error('历史副本保留天数需在 0–3650 之间');
+        }
+        next.webdavArchiveDays = Math.round(days);
+      }
+      if (patch.passwordMaxAgeDays !== undefined) {
+        const days = Number(patch.passwordMaxAgeDays);
+        if (!Number.isFinite(days) || days < 0 || days > 3650) {
+          throw new Error('密码到期天数需在 0–3650 之间');
+        }
+        next.passwordMaxAgeDays = Math.round(days);
+      }
+      if (patch.trashRetentionDays !== undefined) {
+        const days = Number(patch.trashRetentionDays);
+        if (!Number.isFinite(days) || days < 0 || days > 365) {
+          throw new Error('回收站保留天数需在 0–365 之间');
+        }
+        next.trashRetentionDays = Math.round(days);
+      }
       if (patch.uiLanguage !== undefined) {
         if (!['auto', 'zh-CN', 'en'].includes(patch.uiLanguage)) throw new Error('界面语言无效');
         next.uiLanguage = patch.uiLanguage;
@@ -4457,6 +4924,21 @@ async function handleMessage(message, sender) {
         if (!materials.includes(patch.material)) throw new Error('材质设置无效');
         next.material = patch.material;
       }
+      if (patch.accentColor !== undefined) {
+        const accents = ['indigo', 'ocean', 'emerald', 'rose', 'amber', 'violet'];
+        if (!accents.includes(patch.accentColor)) throw new Error('强调色设置无效');
+        next.accentColor = patch.accentColor;
+      }
+      if (patch.glassStrength !== undefined) {
+        const strengths = ['soft', 'strong', 'ultra'];
+        if (!strengths.includes(patch.glassStrength)) throw new Error('玻璃强度设置无效');
+        next.glassStrength = patch.glassStrength;
+      }
+      if (patch.uiRadius !== undefined) {
+        const radii = ['soft', 'round', 'square'];
+        if (!radii.includes(patch.uiRadius)) throw new Error('界面圆角设置无效');
+        next.uiRadius = patch.uiRadius;
+      }
       for (const key of [
         'autoFill',
         'autoOpenOnFocus',
@@ -4469,6 +4951,7 @@ async function handleMessage(message, sender) {
         'lockOnSystemLock',
         'lockOnSystemIdle',
         'portIsolation',
+        'webdavAutoBackup',
       ]) {
         if (patch[key] !== undefined) next[key] = Boolean(patch[key]);
       }
@@ -4495,6 +4978,13 @@ async function handleMessage(message, sender) {
       }
       const saved = await saveSettings(next);
       touchSession();
+      if (
+        next.webdavAutoBackup !== undefined ||
+        next.webdavAutoBackupHours !== undefined
+      ) {
+        await scheduleWebdavAutoBackup();
+      }
+      if (next.showIcon !== undefined) await buildContextMenus();
       if (next.syncTrigger !== undefined) {
         broadcastSync();
         if (next.syncTrigger === 'realtime' && syncDirty) scheduleSyncPush();
@@ -4564,6 +5054,8 @@ async function initialize() {
   if (!stored) await writeLocal(STORAGE.settings, DEFAULT_SETTINGS);
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
   await chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: 1 });
+  await scheduleWebdavAutoBackup();
+  await buildContextMenus();
   try {
     if (chrome.idle?.setDetectionInterval) chrome.idle.setDetectionInterval(60);
   } catch {
@@ -4586,10 +5078,24 @@ async function initialize() {
   }
 }
 
+let initializePromise = null;
+
+/**
+ * The worker boot call, `onInstalled` and `onStartup` can all fire in the same
+ * tick (a fresh install also starts the worker). Run the body once and share
+ * the promise so alarms, badges and context menus are not built twice.
+ */
 function safeInitialize() {
-  void initialize().catch((error) => {
-    console.error('[SubVault] initialize failed:', error?.message || error);
-  });
+  if (!initializePromise) {
+    initializePromise = initialize()
+      .catch((error) => {
+        console.error('[SubVault] initialize failed:', error?.message || error);
+      })
+      .finally(() => {
+        initializePromise = null;
+      });
+  }
+  return initializePromise;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -4611,6 +5117,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name === TRAVEL_ALARM) {
     void disableTravel('auto').catch(() => {});
+    return;
+  }
+  if (alarm.name === WEBDAV_BACKUP_ALARM) {
+    void (async () => {
+      await loadSession();
+      await webdavAutoBackupTick();
+    })().catch(() => {});
     return;
   }
   if (alarm.name === SYNC_ALARM_NAME) {
@@ -4664,6 +5177,26 @@ if (chrome.tabs?.onUpdated) {
 }
 
 chrome.commands.onCommand.addListener((command) => {
+  if (command === 'lock-vault') {
+    void lockVault({ broadcast: true }).catch(() => {});
+    return;
+  }
+  if (command === 'open-popup') {
+    void (async () => {
+      try {
+        await chrome.action.openPopup();
+        return;
+      } catch {
+        /* older Chromium cannot open the popup programmatically */
+      }
+      try {
+        await chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html#vault') });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return;
+  }
   if (command !== 'fill-login') return;
   void (async () => {
     try {
@@ -4673,6 +5206,102 @@ chrome.commands.onCommand.addListener((command) => {
       /* active tab has no content script (chrome:// etc.) */
     }
   })();
+});
+
+/* ------------------------------------------------------------------ */
+/* Context menu                                                        */
+/* ------------------------------------------------------------------ */
+
+const MENU_FILL = 'subvault-fill';
+const MENU_OPEN = 'subvault-open';
+const MENU_GENERATE = 'subvault-generate';
+
+/**
+ * `chrome.contextMenus.create` reports duplicate ids through
+ * `runtime.lastError` instead of throwing, and `removeAll()` is asynchronous.
+ * Two concurrent calls (worker boot + a settings change, or two worker starts)
+ * would therefore interleave and log "Cannot create item with duplicate id".
+ * Serialize every rebuild through one promise chain and consume lastError.
+ */
+let contextMenuChain = Promise.resolve();
+
+function createContextMenu(details) {
+  return new Promise((resolve) => {
+    try {
+      chrome.contextMenus.create(details, () => {
+        /* Reading lastError marks it as handled. A duplicate id here can only
+           happen if another extension instance raced us; the next rebuild
+           removes everything anyway. */
+        void chrome.runtime.lastError;
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
+
+async function rebuildContextMenus() {
+  if (!chrome.contextMenus?.create) return;
+  try {
+    await chrome.contextMenus.removeAll();
+  } catch {
+    /* first run */
+  }
+  const settings = await getSettings().catch(() => null);
+  if (!settings?.showIcon) return;
+  await createContextMenu({
+    id: MENU_FILL,
+    title: '用 SubVault 填充此页面',
+    contexts: ['page', 'editable'],
+  });
+  await createContextMenu({
+    id: MENU_GENERATE,
+    title: '生成随机密码并复制',
+    contexts: ['editable', 'page'],
+  });
+  await createContextMenu({
+    id: MENU_OPEN,
+    title: '打开 SubVault 账号面板',
+    contexts: ['page', 'editable'],
+  });
+}
+
+function buildContextMenus() {
+  contextMenuChain = contextMenuChain
+    .catch(() => {})
+    .then(() => rebuildContextMenus())
+    .catch(() => {});
+  return contextMenuChain;
+}
+
+chrome.contextMenus?.onClicked.addListener((info, tab) => {
+  void (async () => {
+    if (info.menuItemId === MENU_OPEN) {
+      try {
+        await chrome.action.openPopup();
+      } catch {
+        await chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html#vault') });
+      }
+      return;
+    }
+    if (info.menuItemId === MENU_FILL) {
+      if (tab?.id) {
+        await chrome.tabs
+          .sendMessage(tab.id, { type: 'SV_FILL_SHORTCUT' })
+          .catch(() => {});
+      }
+      return;
+    }
+    if (info.menuItemId === MENU_GENERATE) {
+      // Generation + clipboard live in the content script (workers have no DOM).
+      if (tab?.id) {
+        await chrome.tabs
+          .sendMessage(tab.id, { type: 'SV_GENERATE_SHORTCUT' })
+          .catch(() => {});
+      }
+    }
+  })().catch(() => {});
 });
 
 void safeInitialize();

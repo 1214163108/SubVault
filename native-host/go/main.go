@@ -2,7 +2,7 @@
 //
 // Protocol: Chrome native messaging (4-byte little-endian length + UTF-8 JSON).
 // Commands: ping, status, pull, publish, webdav-status, webdav-pull,
-// webdav-push. Emits {"type":"change"} when another process publishes a new
+// webdav-push, webdav-history, webdav-prune. Emits {"type":"change"} when another process publishes a new
 // revision. WebDAV is proxied here so the extension never opens a socket.
 package main
 
@@ -19,7 +19,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +59,21 @@ func resolveDataDir() string {
 	if custom := os.Getenv("SUBVAULT_SYNC_DIR"); custom != "" {
 		return custom
 	}
+	// The vault must not live next to the host binary: reinstalling or moving
+	// the host would look like "vault disappeared" and the other browser would
+	// fail to decrypt whatever replaced it. Keep it in a stable per-user folder
+	// and migrate any older exe-adjacent state once.
+	if config := stableBaseDir(); config != "" {
+		stable := filepath.Join(config, "SubVaultSync")
+		if err := os.MkdirAll(stable, 0o755); err == nil {
+			probe := filepath.Join(stable, ".write-test")
+			if err := os.WriteFile(probe, []byte("ok"), 0o644); err == nil {
+				_ = os.Remove(probe)
+				migrateLegacyData(stable)
+				return stable
+			}
+		}
+	}
 	if exe, err := os.Executable(); err == nil {
 		dir := filepath.Dir(exe)
 		probe := filepath.Join(dir, ".write-test")
@@ -64,10 +82,49 @@ func resolveDataDir() string {
 			return filepath.Join(dir, "data")
 		}
 	}
-	if config, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(config, "SubVaultSync")
-	}
 	return filepath.Join(os.TempDir(), "SubVaultSync")
+}
+
+// stableBaseDir returns the per-user folder that matches the C# host, so both
+// host builds share one vault location. On Windows the C# host uses
+// %LOCALAPPDATA%, which differs from os.UserConfigDir() (%APPDATA%).
+func stableBaseDir() string {
+	if runtime.GOOS == "windows" {
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			return local
+		}
+	}
+	if config, err := os.UserConfigDir(); err == nil {
+		return config
+	}
+	return ""
+}
+
+// migrateLegacyData copies state from the old exe-adjacent "data" folder into
+// the stable folder. Existing files win, so this is safe to run on every start.
+func migrateLegacyData(stableDir string) {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	legacyDir := filepath.Join(filepath.Dir(exe), "data")
+	entries, err := os.ReadDir(legacyDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		target := filepath.Join(stableDir, entry.Name())
+		if _, err := os.Stat(target); err == nil {
+			continue
+		}
+		source := filepath.Join(legacyDir, entry.Name())
+		if raw, err := os.ReadFile(source); err == nil {
+			_ = os.WriteFile(target, raw, 0o644)
+		}
+	}
 }
 
 func readState(path string) state {
@@ -503,6 +560,20 @@ func webdavPull(message map[string]any) map[string]any {
 	}
 }
 
+func webdavBackupName(value any) string {
+	name := messageText(value)
+	if name == "" || len(name) > 120 || !strings.HasSuffix(strings.ToLower(name), ".json") {
+		return ""
+	}
+	for _, c := range name {
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'
+		if !ok {
+			return ""
+		}
+	}
+	return name
+}
+
 func webdavPush(message map[string]any) map[string]any {
 	cfg, endpoint, err := webdavConfigFrom(message)
 	if err != nil {
@@ -534,6 +605,9 @@ func webdavPush(message map[string]any) map[string]any {
 	} else {
 		headers["If-None-Match"] = "*"
 	}
+	if etag == "" {
+		_ = webdavMkcol(endpoint, cfg)
+	}
 	resp, err := webdavRequest(http.MethodPut, endpoint, cfg, body, headers)
 	if err != nil {
 		return errorResponse(err.Error())
@@ -555,10 +629,27 @@ func webdavPush(message map[string]any) map[string]any {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		return errorResponse(webdavFailure(resp))
 	}
+	backupName := webdavBackupName(message["backupName"])
+	archiveError := ""
+	if backupName != "" {
+		archiveEndpoint := strings.TrimSuffix(endpoint, "/state.json") + "/" + backupName
+		archiveHeaders := map[string]string{"Content-Type": "application/json", "If-None-Match": "*"}
+		archiveResp, archiveErr := webdavRequest(http.MethodPut, archiveEndpoint, cfg, body, archiveHeaders)
+		if archiveErr != nil {
+			archiveError = "历史备份副本写入失败：" + archiveErr.Error()
+		} else {
+			_, _ = io.Copy(io.Discard, archiveResp.Body)
+			archiveResp.Body.Close()
+			if archiveResp.StatusCode != http.StatusOK && archiveResp.StatusCode != http.StatusCreated && archiveResp.StatusCode != http.StatusNoContent {
+				archiveError = fmt.Sprintf("历史备份副本写入失败（HTTP %d）", archiveResp.StatusCode)
+			}
+		}
+	}
 	return map[string]any{
 		"ok": true, "revision": baseRevision + 1,
 		"updatedAt": envelope["updatedAt"],
 		"etag":      strings.TrimSpace(resp.Header.Get("ETag")),
+		"name":      backupName, "archiveError": archiveError,
 	}
 }
 
@@ -595,6 +686,183 @@ func webdavMkcol(endpoint string, cfg webdavConfig) error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Backup history: list and prune the subvault-YYYYMMDD-HHmmss.json archives.
+// ---------------------------------------------------------------------------
+
+var backupNamePattern = regexp.MustCompile(`^subvault-\d{8}-\d{6}\.json$`)
+
+func webdavDir(endpoint string) string {
+	return strings.TrimSuffix(endpoint, "/state.json")
+}
+
+type backupArchive struct {
+	Name     string `json:"name"`
+	Modified int64  `json:"modified"`
+	Size     int64  `json:"size"`
+}
+
+func parseDavModified(raw string) int64 {
+	for _, layout := range []string{time.RFC1123, time.RFC1123Z, "Mon, 02 Jan 2006 15:04:05 GMT"} {
+		if parsed, err := time.Parse(layout, strings.TrimSpace(raw)); err == nil {
+			return parsed.UnixMilli()
+		}
+	}
+	return 0
+}
+
+// webdavListArchives issues PROPFIND Depth:1 on the vault directory. Servers
+// that do not support PROPFIND fall back to an empty list rather than failing
+// the whole backup flow.
+func webdavListArchives(endpoint string, cfg webdavConfig) ([]backupArchive, error) {
+	dir := webdavDir(endpoint)
+	body := []byte(`<?xml version="1.0" encoding="utf-8"?>
+<d:propfind xmlns:d="DAV:"><d:prop><d:getlastmodified/><d:getcontentlength/><d:resourcetype/></d:prop></d:propfind>`)
+	headers := map[string]string{"Depth": "1", "Content-Type": "application/xml; charset=utf-8"}
+	resp, err := webdavRequest("PROPFIND", dir, cfg, body, headers)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotImplemented {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusMultiStatus && resp.StatusCode != http.StatusOK {
+		return nil, errors.New(webdavFailure(resp))
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxMessage))
+	if err != nil {
+		return nil, err
+	}
+	archives := make([]backupArchive, 0, 8)
+	for _, block := range strings.Split(string(raw), "<d:response")[1:] {
+		href := xmlTagText(block, "d:href")
+		if href == "" {
+			href = xmlTagText(block, "href")
+		}
+		if href == "" {
+			continue
+		}
+		name := href
+		if index := strings.LastIndex(name, "/"); index >= 0 {
+			name = name[index+1:]
+		}
+		if decoded, decodeErr := url.PathUnescape(name); decodeErr == nil {
+			name = decoded
+		}
+		if !backupNamePattern.MatchString(name) {
+			continue
+		}
+		modified := parseDavModified(xmlTagText(block, "d:getlastmodified"))
+		if modified == 0 {
+			modified = parseDavModified(xmlTagText(block, "getlastmodified"))
+		}
+		size := int64(0)
+		if text := xmlTagText(block, "d:getcontentlength"); text != "" {
+			if parsed, convErr := strconv.ParseInt(strings.TrimSpace(text), 10, 64); convErr == nil {
+				size = parsed
+			}
+		}
+		archives = append(archives, backupArchive{Name: name, Modified: modified, Size: size})
+	}
+	sort.Slice(archives, func(a, b int) bool {
+		if archives[a].Modified != archives[b].Modified {
+			return archives[a].Modified > archives[b].Modified
+		}
+		return archives[a].Name > archives[b].Name
+	})
+	return archives, nil
+}
+
+func xmlTagText(block string, tag string) string {
+	open := strings.Index(block, "<"+tag)
+	if open < 0 {
+		return ""
+	}
+	start := strings.Index(block[open:], ">")
+	if start < 0 {
+		return ""
+	}
+	start += open + 1
+	end := strings.Index(block[start:], "</"+tag)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(block[start : start+end])
+}
+
+func webdavHistory(message map[string]any) map[string]any {
+	cfg, endpoint, err := webdavConfigFrom(message)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	archives, err := webdavListArchives(endpoint, cfg)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	return map[string]any{"ok": true, "archives": archives, "count": len(archives)}
+}
+
+// webdavPrune deletes archives beyond the newest `keep` entries, or older than
+// `olderThanDays`. Both limits are optional; when both are zero nothing is
+// deleted so an accidental call can never wipe history.
+func webdavPrune(message map[string]any) map[string]any {
+	cfg, endpoint, err := webdavConfigFrom(message)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	keep := 0
+	if value, ok := message["keep"].(float64); ok && value > 0 {
+		keep = int(value)
+	}
+	olderThanDays := 0
+	if value, ok := message["olderThanDays"].(float64); ok && value > 0 {
+		olderThanDays = int(value)
+	}
+	if keep == 0 && olderThanDays == 0 {
+		return map[string]any{"ok": true, "deleted": []string{}, "skipped": "未配置保留数量或过期天数"}
+	}
+	archives, err := webdavListArchives(endpoint, cfg)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	cutoff := int64(0)
+	if olderThanDays > 0 {
+		cutoff = time.Now().AddDate(0, 0, -olderThanDays).UnixMilli()
+	}
+	deleted := make([]string, 0, 4)
+	failures := make([]string, 0, 2)
+	dir := webdavDir(endpoint)
+	for index, archive := range archives {
+		drop := false
+		if keep > 0 && index >= keep {
+			drop = true
+		}
+		if cutoff > 0 && archive.Modified > 0 && archive.Modified < cutoff {
+			drop = true
+		}
+		if !drop {
+			continue
+		}
+		resp, delErr := webdavRequest(http.MethodDelete, dir+"/"+archive.Name, cfg, nil, nil)
+		if delErr != nil {
+			failures = append(failures, archive.Name+"："+delErr.Error())
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
+			deleted = append(deleted, archive.Name)
+			continue
+		}
+		failures = append(failures, fmt.Sprintf("%s：HTTP %d", archive.Name, resp.StatusCode))
+	}
+	return map[string]any{
+		"ok": true, "deleted": deleted, "failures": failures,
+		"remaining": len(archives) - len(deleted), "keep": keep, "olderThanDays": olderThanDays,
+	}
+}
+
 func errorResponse(text string) map[string]any {
 	return map[string]any{"ok": false, "error": text}
 }
@@ -615,6 +883,10 @@ func handle(message map[string]any) map[string]any {
 		return webdavPull(message)
 	case "webdav-push":
 		return webdavPush(message)
+	case "webdav-history":
+		return webdavHistory(message)
+	case "webdav-prune":
+		return webdavPrune(message)
 	case "device-status", "device-protect", "device-unlock", "device-forget":
 		return map[string]any{
 			"ok":        false,

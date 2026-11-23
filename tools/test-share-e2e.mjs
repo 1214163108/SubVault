@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { unpackContainer, isContainerBytes } from '../src/lib/container.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const syncDir = path.join(root, '.tmp-host', 'share-data');
@@ -38,7 +39,12 @@ try {
   await page.evaluate(() =>
     chrome.runtime.sendMessage({
       type: 'SV_SET_SETTINGS',
-      settings: { lockOnSystemLock: false, lockOnSystemIdle: false, autoLockMinutes: 0 },
+      settings: {
+        lockOnSystemLock: false,
+        lockOnSystemIdle: false,
+        autoLockMinutes: 0,
+        privacyShieldOnBlur: false,
+      },
     }),
   );
   await page.evaluate(async () => {
@@ -86,7 +92,9 @@ try {
   const download = await downloadPromise;
   const filePath = path.join(downloadDir, download.suggestedFilename());
   await download.saveAs(filePath);
-  const pkg = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const raw = fs.readFileSync(filePath);
+  result.checks.isContainer = isContainerBytes(new Uint8Array(raw));
+  const pkg = await unpackContainer(new Uint8Array(raw));
   result.checks.fileName = download.suggestedFilename();
   result.checks.format = pkg.format;
   result.checks.entryCount = pkg.box ? pkg.entryCount ?? null : null;

@@ -2,6 +2,7 @@ import {
   clearClipboard,
   clipboardMessage,
   copyText,
+  faviconUrl,
   formatDateTime,
   makeToast,
   readFileBase64,
@@ -15,7 +16,7 @@ import {
   parseHttpUrl,
   suggestBaseDomain,
 } from '../lib/domain.js';
-import { generatePassword, generatePin } from '../lib/generator.js';
+import { generatePassword } from '../lib/generator.js';
 import { passwordStrength } from '../lib/crypto.js';
 import { evaluateMasterPassword } from '../lib/strength.js';
 import { applyI18n, installI18n, setUiLanguage } from '../lib/i18n.js';
@@ -44,10 +45,15 @@ const state = {
   siteKey: '',
   isolated: false,
   stats: null,
-  genValue: '',
+  quickPassword: '',
+  rowOtps: new Map(),
+  rowOtpTimer: 0,
   totpEntryId: '',
   totpRemaining: 0,
   totpPeriod: 30,
+  totpKind: 'totp',
+  totpCounter: 0,
+  totpUsername: '',
   totpTimer: 0,
 };
 
@@ -79,6 +85,21 @@ function applyMaterial(material = 'solid') {
   document.documentElement.dataset.material = ['solid', 'glass', 'liquid'].includes(material)
     ? material
     : 'solid';
+}
+
+function applyAppearance(settings = state.settings || {}) {
+  applyTheme(settings.theme);
+  applyMaterial(settings.material);
+  document.documentElement.dataset.accent =
+    ['indigo', 'ocean', 'emerald', 'rose', 'amber', 'violet'].includes(settings.accentColor)
+      ? settings.accentColor
+      : 'indigo';
+  document.documentElement.dataset.glass = ['soft', 'strong', 'ultra'].includes(settings.glassStrength)
+    ? settings.glassStrength
+    : 'strong';
+  document.documentElement.dataset.radius = ['soft', 'round', 'square'].includes(settings.uiRadius)
+    ? settings.uiRadius
+    : 'soft';
 }
 
 function setError(element, message) {
@@ -140,74 +161,6 @@ async function updateMasterStrength(input, bar, text) {
   }
 }
 
-function currentGenOptions() {
-  const pin = Boolean($('genPin').checked);
-  return {
-    pin,
-    length: Number($('genLength').value) || 20,
-    lower: !pin && $('genLower').checked,
-    upper: !pin && $('genUpper').checked,
-    digits: pin || $('genDigits').checked,
-    symbols: !pin && $('genSymbols').checked,
-    readable: Boolean($('genReadable').checked),
-  };
-}
-
-function applyGenOptions(options = {}) {
-  const value = { ...currentGenOptions(), ...options };
-  $('genLength').value = String(value.length);
-  $('genLengthValue').textContent = String(value.length);
-  $('genLower').checked = Boolean(value.lower);
-  $('genUpper').checked = Boolean(value.upper);
-  $('genDigits').checked = Boolean(value.digits);
-  $('genSymbols').checked = Boolean(value.symbols);
-  $('genPin').checked = Boolean(value.pin);
-  $('genReadable').checked = Boolean(value.readable);
-}
-
-let genSaveTimer = null;
-function rememberGenOptions() {
-  clearTimeout(genSaveTimer);
-  genSaveTimer = setTimeout(() => {
-    void send('SV_SET_SETTINGS', { settings: { generatorOptions: currentGenOptions() } }).catch(
-      () => {},
-    );
-  }, 400);
-}
-
-function regenerateStandalone() {
-  const options = currentGenOptions();
-  rememberGenOptions();
-  let password = '';
-  if (options.pin) {
-    password = generatePin(options.length);
-  } else {
-    const classes = [options.lower, options.upper, options.digits, options.symbols].filter(Boolean);
-    if (classes.length === 0) {
-      $('genLower').checked = true;
-      options.lower = true;
-    }
-    password = generatePassword({
-      length: options.length,
-      lower: options.lower,
-      upper: options.upper,
-      digits: options.digits,
-      symbols: options.symbols,
-      readable: options.readable,
-    });
-  }
-  $('genLengthValue').textContent = String(options.length);
-  $('genOutput').textContent = password;
-  state.genValue = password;
-  return password;
-}
-
-function openGenDialog() {
-  applyGenOptions(state.settings?.generatorOptions || {});
-  $('genDialog').showModal();
-  regenerateStandalone();
-}
-
 function setBusy(button, busy, label) {
   if (!button) return;
   if (busy) {
@@ -234,6 +187,8 @@ async function init() {
     state.port = '';
   }
   await refresh();
+  clearInterval(state.rowOtpTimer);
+  state.rowOtpTimer = setInterval(() => void updateRowOtps(), 1000);
 }
 
 async function refresh() {
@@ -253,8 +208,8 @@ async function refresh() {
   state.settings = result.settings || {};
   setUiLanguage(state.settings.uiLanguage || 'auto');
   applyI18n(document.body);
-  applyTheme(state.settings.theme);
-  applyMaterial(state.settings.material);
+  applyAppearance(state.settings);
+  applyQuickGenOptions();
 
   if (!state.initialized) {
     $('lockBtn').hidden = true;
@@ -362,7 +317,9 @@ async function importPopupVault() {
   }
   const button = $('syncImportConfirm');
   setBusy(button, true, '导入中…');
-  const result = await send('SV_SYNC_IMPORT', { password });
+  const file = $('syncImportKeyFile')?.files?.[0];
+  const keyFileBase64 = file ? await readFileBase64(file) : '';
+  const result = await send('SV_SYNC_IMPORT', { password, keyFileBase64 });
   setBusy(button, false);
   if (!result.ok) {
     setError($('syncImportError'), result.error || '导入失败');
@@ -409,6 +366,111 @@ async function syncPopupExisting() {
   await refresh();
 }
 
+
+function currentQuickOptions() {
+  const fallback = state.settings?.generatorOptions || {};
+  const read = (id, key) => {
+    const el = $(id);
+    return el ? el.checked : fallback[key] !== false;
+  };
+  return {
+    length: Math.min(128, Math.max(8, Number($('quickGenLength')?.value) || Number(fallback.length) || 20)),
+    upper: read('quickGenUpper', 'upper'),
+    lower: read('quickGenLower', 'lower'),
+    digits: read('quickGenDigits', 'digits'),
+    symbols: read('quickGenSymbols', 'symbols'),
+    readable: read('quickGenReadable', 'readable'),
+    pin: false,
+  };
+}
+
+function applyQuickGenOptions() {
+  const options = state.settings?.generatorOptions || {};
+  if ($('quickGenLength')) $('quickGenLength').value = String(options.length || 20);
+  for (const [id, key] of [['quickGenUpper', 'upper'], ['quickGenLower', 'lower'], ['quickGenDigits', 'digits'], ['quickGenSymbols', 'symbols'], ['quickGenReadable', 'readable']]) {
+    if ($(id)) $(id).checked = options[key] !== false;
+  }
+}
+
+function quickGenerate() {
+  const options = currentQuickOptions();
+  const value = generatePassword(options);
+  state.quickPassword = value;
+  if ($('quickGenOutput')) $('quickGenOutput').textContent = value;
+}
+
+let quickSaveTimer = 0;
+function persistQuickOptions() {
+  const generatorOptions = currentQuickOptions();
+  state.settings = { ...(state.settings || {}), generatorOptions };
+  clearTimeout(quickSaveTimer);
+  quickSaveTimer = setTimeout(() => {
+    void send('SV_SET_SETTINGS', { settings: { generatorOptions } });
+  }, 250);
+  quickGenerate();
+}
+
+async function updateRowOtps(force = false) {
+  const now = Date.now();
+  const elements = [...document.querySelectorAll('[data-otp-code]')];
+  if (!elements.length) return;
+  for (const element of elements) {
+    const id = element.dataset.otpCode;
+    let record = state.rowOtps.get(id);
+    const stale = !record || (record.type !== 'hotp' && record.expiresAt <= now);
+    if (force || stale) {
+      const result = await send('SV_GET_TOTP_CODE', { id });
+      if (!result.ok) continue;
+      record = {
+        code: result.code,
+        type: result.type || 'totp',
+        counter: Number(result.counter) || 0,
+        period: Number(result.period) || 30,
+        expiresAt: now + (Number(result.remaining) || 0) * 1000,
+      };
+      state.rowOtps.set(id, record);
+    }
+    if (!record) continue;
+    const remaining = Math.max(0, Math.ceil((record.expiresAt - now) / 1000));
+    const codeNode = document.querySelector(`[data-otp-code="${CSS.escape(id)}"]`);
+    const metaNode = document.querySelector(`[data-otp-meta="${CSS.escape(id)}"]`);
+    if (codeNode) {
+      codeNode.textContent = record.code;
+      codeNode.dataset.otpKind = record.type;
+    }
+    if (metaNode) {
+      metaNode.textContent =
+        record.type === 'hotp'
+          ? `#${record.counter}`
+          : record.type === 'steam'
+            ? `Steam ${remaining}s`
+            : `${remaining}s`;
+    }
+  }
+}
+
+async function copyRowOtp(id) {
+  const record = state.rowOtps.get(id);
+  const advance = record?.type === 'hotp';
+  const result = await send('SV_GET_TOTP_CODE', {
+    id,
+    ...(advance ? { advance: true, counter: (record.counter || 0) + 1 } : {}),
+  });
+  if (!result.ok) return toast(result.error || '无法生成动态码', { error: true });
+  if (advance) {
+    state.rowOtps.set(id, {
+      code: result.code,
+      type: 'hotp',
+      counter: Number(result.counter) || 0,
+      period: 0,
+      expiresAt: 0,
+    });
+    void updateRowOtps(true);
+  }
+  const ok = await copyText(result.code);
+  toast(ok ? clipboardMessage('动态码已复制', 30) : '复制失败，请手动选择', { error: !ok });
+}
+
 function renderVault() {
   const host = state.host;
   const displayHost = state.port ? `${host}:${state.port}` : host;
@@ -427,6 +489,11 @@ function renderVault() {
   }
 
   $('matchCount').textContent = host ? `${state.matches.length} 个账号` : '';
+  $('siteTitle').hidden = !host;
+  $('siteTitleText').textContent = '本站账号';
+  document.querySelector('.app')?.classList.toggle('no-site', !host);
+  if (!state.quickPassword) quickGenerate();
+  void updateRowOtps(true);
   renderPending();
   renderMatches();
 }
@@ -474,30 +541,65 @@ function renderPending() {
 function renderMatches() {
   const container = $('matchList');
   container.replaceChildren();
-  $('emptyMatches').hidden = state.matches.length > 0 || !state.host;
+  const rows = state.matches;
+  $('emptyMatches').hidden = rows.length > 0 || !state.host;
 
-  for (const entry of state.matches) {
+  for (const entry of rows) {
     const row = document.createElement('div');
     row.className = 'entry-row';
 
     const avatar = document.createElement('div');
     avatar.className = 'entry-avatar';
-    avatar.textContent = (entry.title || entry.host || '?').trim().charAt(0).toUpperCase() || '?';
+    avatar.textContent =
+      (entry.username || entry.title || entry.host || '?').trim().charAt(0).toUpperCase() || '?';
+    const icon = faviconUrl(entry.host, 32);
+    if (icon) {
+      const img = document.createElement('img');
+      img.className = 'entry-favicon';
+      img.alt = '';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('load', () => avatar.classList.add('has-favicon'));
+      img.addEventListener('error', () => img.remove());
+      img.src = icon;
+      avatar.appendChild(img);
+    }
 
     const body = document.createElement('div');
     body.className = 'entry-body';
-    const title = document.createElement('div');
-    title.className = 'entry-title';
-    title.textContent = entry.title || entry.host;
     const user = document.createElement('div');
     user.className = 'entry-user';
-    user.textContent = entry.username || '无用户名';
+    user.textContent = entry.username || entry.title || '未填写账号';
     const meta = document.createElement('div');
     meta.className = 'entry-meta';
-    const bits = [`记录于 ${formatDateTime(entry.passwordChangedAt)}`];
-    if (entry.host !== state.host) bits.push(`来自 ${entry.host}`);
+    const bits = [];
+    // The site is already shown in the header; only surface a custom title that
+    // adds information beyond the host and the username.
+    const customTitle = entry.title && entry.title !== entry.host && entry.title !== user.textContent;
+    if (customTitle) bits.push(entry.title);
+    bits.push(`记录于 ${formatDateTime(entry.passwordChangedAt)}`);
     meta.textContent = bits.join(' · ');
-    body.append(title, user, meta);
+    body.append(user, meta);
+    if (entry.hasTotp) {
+      const otp = document.createElement('div');
+      otp.className = 'entry-otp';
+      const code = document.createElement('strong');
+      code.dataset.otpCode = entry.id;
+      code.textContent = '------';
+      const metaOtp = document.createElement('span');
+      metaOtp.dataset.otpMeta = entry.id;
+      metaOtp.textContent = '';
+      const copyOtp = document.createElement('button');
+      copyOtp.type = 'button';
+      copyOtp.className = 'entry-otp-copy';
+      copyOtp.title = '复制动态码';
+      copyOtp.textContent = '复制';
+      copyOtp.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void copyRowOtp(entry.id);
+      });
+      otp.append(code, metaOtp, copyOtp);
+      body.appendChild(otp);
+    }
 
     const actions = document.createElement('div');
     actions.className = 'entry-actions';
@@ -516,11 +618,6 @@ function renderMatches() {
         toast(error?.message || '复制密码失败', { error: true });
       }
     });
-    if (entry.hasTotp) {
-      const totpButton = iconButton(ICON.totp, '动态验证码', 'totp');
-      totpButton.addEventListener('click', () => void openTotp(entry));
-      actions.append(totpButton);
-    }
     actions.append(fill, copyUser, copyPasswordButton);
 
     row.append(avatar, body, actions);
@@ -536,6 +633,27 @@ function updatePopupTotpProgress() {
   bar.dataset.low = ratio <= 0.2 ? 'true' : 'false';
 }
 
+function popupTotpMetaText() {
+  const user = state.totpUsername || '无用户名';
+  if (state.totpKind === 'hotp') return `${user} · 计数器 #${state.totpCounter}`;
+  if (state.totpKind === 'steam') return `${user} · Steam Guard · ${state.totpRemaining} 秒后刷新`;
+  return `${user} · ${state.totpRemaining} 秒后刷新`;
+}
+
+function applyPopupTotp(result) {
+  state.totpKind = result.type || 'totp';
+  state.totpUsername = result.username || '';
+  state.totpCounter = Number(result.counter) || 0;
+  state.totpRemaining = Number(result.remaining) || 0;
+  state.totpPeriod = Number(result.period) || 30;
+  $('totpCode').textContent = result.code;
+  $('totpCode').dataset.kind = state.totpKind;
+  $('totpProgress').hidden = state.totpKind === 'hotp';
+  $('totpNextBtn').hidden = state.totpKind !== 'hotp';
+  updatePopupTotpProgress();
+  $('totpMeta').textContent = popupTotpMetaText();
+}
+
 async function refreshPopupTotp() {
   if (!state.totpEntryId) return;
   const result = await send('SV_GET_TOTP_CODE', { id: state.totpEntryId });
@@ -544,11 +662,7 @@ async function refreshPopupTotp() {
     closeTotp();
     return;
   }
-  $('totpCode').textContent = result.code;
-  state.totpRemaining = result.remaining;
-  state.totpPeriod = Number(result.period) || 30;
-  updatePopupTotpProgress();
-  $('totpMeta').textContent = `${result.username || '无用户名'} · ${result.remaining} 秒后刷新`;
+  applyPopupTotp(result);
 }
 
 async function openTotp(entry) {
@@ -560,20 +674,17 @@ async function openTotp(entry) {
   clearInterval(state.totpTimer);
   state.totpEntryId = entry.id;
   $('totpTitle').textContent = `${entry.title || entry.host} 的动态码`;
-  $('totpCode').textContent = result.code;
-  state.totpRemaining = result.remaining;
-  state.totpPeriod = Number(result.period) || 30;
-  updatePopupTotpProgress();
-  $('totpMeta').textContent = `${result.username || '无用户名'} · ${result.remaining} 秒后刷新`;
+  applyPopupTotp(result);
   $('totpDialog').showModal();
   state.totpTimer = setInterval(() => {
+    if (state.totpKind === 'hotp') return;
     state.totpRemaining -= 1;
     if (state.totpRemaining <= 0) {
       void refreshPopupTotp();
       return;
     }
     updatePopupTotpProgress();
-    $('totpMeta').textContent = `${result.username || '无用户名'} · ${state.totpRemaining} 秒后刷新`;
+    $('totpMeta').textContent = popupTotpMetaText();
   }, 1000);
 }
 
@@ -582,9 +693,28 @@ function closeTotp() {
   state.totpTimer = 0;
   state.totpEntryId = '';
   state.totpRemaining = 0;
+  state.totpKind = 'totp';
+  state.totpCounter = 0;
   updatePopupTotpProgress();
   $('totpCode').textContent = '------';
+  $('totpCode').dataset.kind = '';
+  $('totpProgress').hidden = false;
+  $('totpNextBtn').hidden = true;
   $('totpMeta').textContent = '';
+}
+
+async function nextHotpCode() {
+  if (!state.totpEntryId) return;
+  const result = await send('SV_GET_TOTP_CODE', {
+    id: state.totpEntryId,
+    advance: true,
+    counter: (state.totpCounter || 0) + 1,
+  });
+  if (!result.ok) {
+    toast(result.error || '无法生成动态码', { error: true });
+    return;
+  }
+  applyPopupTotp(result);
 }
 
 async function copyTotp() {
@@ -938,45 +1068,25 @@ function bindEvents() {
   });
   bindRevealButtons();
 
-  $('genBtn').addEventListener('click', openGenDialog);
+  for (const id of ['quickGenLength', 'quickGenUpper', 'quickGenLower', 'quickGenDigits', 'quickGenSymbols', 'quickGenReadable']) {
+    $(id)?.addEventListener(id === 'quickGenLength' ? 'input' : 'change', persistQuickOptions);
+  }
+  $('quickGenRefresh')?.addEventListener('click', () => {
+    state.quickPassword = '';
+    quickGenerate();
+  });
+  $('quickGenCopy')?.addEventListener('click', async () => {
+    if (!state.quickPassword) quickGenerate();
+    const ok = await copyText(state.quickPassword);
+    toast(ok ? '已复制生成的密码' : '复制失败，请手动选择', ok ? undefined : { error: true });
+  });
   $('totpClose').addEventListener('click', () => $('totpDialog').close());
   $('totpDialog').addEventListener('close', closeTotp);
   $('totpDialog').addEventListener('click', (event) => {
     if (event.target === $('totpDialog')) $('totpDialog').close();
   });
   $('totpCopyBtn').addEventListener('click', () => void copyTotp());
-
-  $('genClose').addEventListener('click', () => $('genDialog').close());
-  $('genDialog').addEventListener('click', (event) => {
-    if (event.target === $('genDialog')) $('genDialog').close();
-  });
-  $('genLength').addEventListener('input', regenerateStandalone);
-  for (const id of ['genLower', 'genUpper', 'genDigits', 'genSymbols', 'genReadable', 'genPin']) {
-    $(id).addEventListener('change', () => {
-      if (id === 'genPin' && $('genPin').checked) {
-        $('genLower').checked = false;
-        $('genUpper').checked = false;
-        $('genSymbols').checked = false;
-      }
-      regenerateStandalone();
-    });
-  }
-  $('genRegenerate').addEventListener('click', regenerateStandalone);
-  $('genCopy').addEventListener('click', async () => {
-    if (!state.genValue) regenerateStandalone();
-    const ok = await copyText(state.genValue);
-    toast(ok ? '密码已复制' : '复制失败，请手动选择', { error: !ok });
-  });
-  $('genUse').addEventListener('click', () => {
-    if (!state.genValue) regenerateStandalone();
-    const password = state.genValue;
-    $('genDialog').close();
-    openEntryDialog();
-    $('entryPassword').value = password;
-    $('entryPassword').type = 'text';
-    $('entryReveal').textContent = '隐藏';
-    updateStrength($('entryPassword'), $('entryStrengthBar'), $('entryStrengthText'));
-  });
+  $('totpNextBtn').addEventListener('click', () => void nextHotpCode());
 
   $('unlockBtn').addEventListener('click', () => void unlockVault());
   $('deviceUnlockBtn')?.addEventListener('click', () => void unlockWithDevice());

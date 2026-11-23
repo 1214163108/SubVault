@@ -247,17 +247,13 @@ export function isHostIsolated(host, isolatedDomains = []) {
  * drive.example.com share credentials.
  * Isolated rule: if the host belongs to a configured main domain, the full
  * hostname becomes the bucket, so every subdomain is independent.
- * Port rule: when `portIsolation` is on, localhost/IP buckets include the port;
- * normal DNS names keep ignoring ports.
+ * Port rule: when `portIsolation` is on, every bucket includes the port, so
+ * `example.com:8080` and `example.com:9090` are independent. URLs without an
+ * explicit port keep the plain host bucket.
  */
 export function normalizePort(input) {
   const value = Number(String(input ?? '').replace(/[^\d]/g, ''));
   return Number.isInteger(value) && value > 0 && value <= 65535 ? String(value) : '';
-}
-
-export function isPortScopedHost(host) {
-  const target = normalizeHost(host);
-  return target === 'localhost' || isIpHost(target);
 }
 
 export function siteKeyFor(host, isolatedDomains = [], options = {}) {
@@ -266,7 +262,7 @@ export function siteKeyFor(host, isolatedDomains = [], options = {}) {
   const key = isHostIsolated(target, isolatedDomains)
     ? target
     : suggestBaseDomain(target);
-  if (options.portIsolation && isPortScopedHost(target)) {
+  if (options.portIsolation) {
     const port = normalizePort(options.port);
     if (port) return `${key}:${port}`;
   }

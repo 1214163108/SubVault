@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 
 import {
   base32Decode,
+  generateHotp,
+  generateOtpForEntry,
   generateTotp,
   isValidTotpSecret,
   normalizeTotpSecret,
   parseOtpAuthUri,
+  STEAM_ALPHABET,
 } from '../src/lib/totp.js';
 
 test('Base32 normalization and validation', () => {
@@ -45,4 +48,68 @@ test('otpauth URI carries digits, period and algorithm', () => {
   assert.equal(otp.issuer, 'ACME');
   assert.equal(otp.account, 'alice');
   assert.equal(parseOtpAuthUri('JBSWY3DPEHPK3PXP'), null);
+});
+
+test('RFC 4226 HOTP test vectors (counters 0-9)', async () => {
+  const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+  const expected = [
+    '755224', '287082', '359152', '969429', '338314',
+    '254676', '287922', '162583', '399871', '520489',
+  ];
+  for (let counter = 0; counter < expected.length; counter += 1) {
+    const result = await generateHotp(secret, { counter });
+    assert.equal(result.code, expected[counter], `counter ${counter}`);
+    assert.equal(result.counter, counter);
+  }
+});
+
+test('otpauth://hotp carries the counter and stays stable', async () => {
+  const otp = parseOtpAuthUri(
+    'otpauth://hotp/ACME:bob?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=3',
+  );
+  assert.equal(otp.type, 'hotp');
+  assert.equal(otp.counter, 3);
+  const result = await generateHotp(otp.secret, { counter: otp.counter });
+  assert.equal(result.code, '969429');
+});
+
+test('Steam Guard uses 5 chars from its own alphabet', async () => {
+  const steam = parseOtpAuthUri('steam://JBSWY3DPEHPK3PXP');
+  assert.equal(steam.type, 'steam');
+  assert.equal(steam.digits, 5);
+  const first = await generateTotp(steam.secret, { type: 'steam', now: 1_700_000_000_000 });
+  const second = await generateTotp(steam.secret, { type: 'steam', now: 1_700_000_000_000 });
+  assert.equal(first.code.length, 5);
+  assert.equal(first.code, second.code);
+  assert.equal([...first.code].every((char) => STEAM_ALPHABET.includes(char)), true);
+  assert.equal(first.type, 'steam');
+  assert.equal(first.remaining >= 1 && first.remaining <= 30, true);
+});
+
+test('otpauth://totp with issuer=Steam and no digits is treated as Steam', () => {
+  const otp = parseOtpAuthUri('otpauth://totp/Steam:alice?secret=JBSWY3DPEHPK3PXP&issuer=Steam');
+  assert.equal(otp.type, 'steam');
+  assert.equal(otp.digits, 5);
+  const plain = parseOtpAuthUri('otpauth://totp/ACME:alice?secret=JBSWY3DPEHPK3PXP&issuer=ACME');
+  assert.equal(plain.type, 'totp');
+  assert.equal(plain.digits, 6);
+});
+
+test('generateOtpForEntry dispatches by stored type', async () => {
+  const base = { totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', totpDigits: 6 };
+  const hotp = await generateOtpForEntry({ ...base, totpType: 'hotp', totpCounter: 1 });
+  assert.equal(hotp.code, '287082');
+  assert.equal(hotp.period, 0);
+  const totp = await generateOtpForEntry(
+    { ...base, totpType: 'totp' },
+    { now: 59_000 },
+  );
+  assert.equal(totp.code.length, 6);
+  const steam = await generateOtpForEntry({
+    ...base,
+    totpType: 'steam',
+    totpSecret: 'JBSWY3DPEHPK3PXP',
+  });
+  assert.equal(steam.code.length, 5);
+  await assert.rejects(() => generateOtpForEntry({ totpSecret: '' }));
 });

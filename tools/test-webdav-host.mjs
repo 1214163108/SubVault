@@ -15,6 +15,7 @@ let collection = false;
 let body = Buffer.alloc(0);
 let etag = '"v0"';
 let counter = 0;
+const archives = new Map();
 
 const server = http.createServer((req, res) => {
   const auth = req.headers.authorization || '';
@@ -22,6 +23,38 @@ const server = http.createServer((req, res) => {
   if (auth !== expected) {
     res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="subvault"' });
     res.end('auth required');
+    return;
+  }
+  const archiveMatch = /^\/dav\/subvault\/([^/]+\.json)$/.exec(req.url);
+  if (archiveMatch && archiveMatch[1] !== 'state.json') {
+    if (req.method === 'DELETE') {
+      if (!archives.delete(archiveMatch[1])) { res.writeHead(404); res.end('missing'); return; }
+      res.writeHead(204); res.end(); return;
+    }
+    if (req.method !== 'PUT') { res.writeHead(405); res.end('method not allowed'); return; }
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (req.headers['if-none-match'] === '*' && archives.has(archiveMatch[1])) { res.writeHead(412); res.end('exists'); return; }
+      archives.set(archiveMatch[1], Buffer.concat(chunks));
+      res.writeHead(201); res.end();
+    });
+    return;
+  }
+  if (req.url === '/dav/subvault' && req.method === 'PROPFIND') {
+    const items = [];
+    if (exists) items.push({ name: 'state.json', size: body.length, modified: new Date(2026, 0, 1, 0, 0, 0).toUTCString() });
+    for (const [name, buf] of archives) {
+      items.push({ name, size: buf.length, modified: new Date(2026, 0, 2, 0, 0, 0).toUTCString() });
+    }
+    const xml = `<?xml version="1.0" encoding="utf-8"?>\n<d:multistatus xmlns:d="DAV:">${items
+      .map(
+        (item) =>
+          `<d:response><d:href>/dav/subvault/${item.name}</d:href><d:propstat><d:prop><d:getlastmodified>${item.modified}</d:getlastmodified><d:getcontentlength>${item.size}</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`,
+      )
+      .join('')}</d:multistatus>`;
+    res.writeHead(207, { 'Content-Type': 'application/xml; charset=utf-8' });
+    res.end(xml);
     return;
   }
   if (req.url !== '/dav/subvault/state.json' && req.url !== '/dav/subvault') {
@@ -86,8 +119,10 @@ const config = { url: base, username: user, password: pass };
 const result = {};
 result.ping = (await send({ type: 'ping' })).pong === true;
 result.emptyStatus = (await send({ type: 'webdav-status', config })).exists === false;
-const first = await send({ type: 'webdav-push', config, baseRevision: 0, etag: '', vault: { v: 1, cipher: 'AES-GCM' }, settings: { theme: 'dark' }, ignores: ['example.net'] });
+const first = await send({ type: 'webdav-push', config, baseRevision: 0, etag: '', backupName: 'subvault-20260101-000000.json', vault: { v: 1, cipher: 'AES-GCM' }, settings: { theme: 'dark' }, ignores: ['example.net'] });
 result.firstPush = first.ok === true && first.revision === 1 && typeof first.etag === 'string' && first.etag.length > 0;
+result.backupName = first.name === 'subvault-20260101-000000.json' && archives.has('subvault-20260101-000000.json') && archives.get('subvault-20260101-000000.json').length > 0;
+result.noArchiveError = first.archiveError === '';
 const etag1 = first.etag;
 result.notModified = (await send({ type: 'webdav-status', config, etag: etag1 })).notModified === true;
 const pulled = await send({ type: 'webdav-pull', config });
@@ -100,6 +135,19 @@ const second = await send({ type: 'webdav-push', config, baseRevision: 1, etag: 
 result.secondPush = second.ok === true && second.revision === 2 && second.etag !== etag1;
 const pulled2 = await send({ type: 'webdav-pull', config });
 result.pullSecond = pulled2.vault?.v === 2 && pulled2.revision === 2;
+const history = await send({ type: 'webdav-history', config });
+result.historyCount = history.ok === true && history.count === 1 && history.archives?.[0]?.name === 'subvault-20260101-000000.json';
+result.historySize = Number(history.archives?.[0]?.size) > 0 && typeof history.archives?.[0]?.modified === 'number';
+const noopPrune = await send({ type: 'webdav-prune', config, keep: 0, olderThanDays: 0 });
+result.pruneNoop = noopPrune.ok === true && noopPrune.deleted.length === 0 && typeof noopPrune.skipped === 'string' && noopPrune.skipped.length > 0;
+const keepZero = await send({ type: 'webdav-prune', config, keep: 1, olderThanDays: 0 });
+result.pruneKeep = keepZero.ok === true && keepZero.deleted.length === 0 && keepZero.remaining === 1;
+const pruneAll = await send({ type: 'webdav-prune', config, keep: 0, olderThanDays: 1 });
+result.pruneDeleted =
+  pruneAll.ok === true &&
+  pruneAll.deleted.length === 1 &&
+  pruneAll.remaining === 0 &&
+  !archives.has('subvault-20260101-000000.json');
 result.insecureRejected = (await send({ type: 'webdav-status', config: { ...config, url: 'http://example.com/dav' } })).error?.includes('HTTPS') === true;
 result.pass = Object.values(result).every(Boolean);
 console.log(JSON.stringify(result, null, 2));

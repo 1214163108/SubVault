@@ -87,6 +87,7 @@ try {
         lockOnSystemIdle: false,
         autoOpenOnFocus: false,
         autoLockMinutes: 0,
+        privacyShieldOnBlur: false,
       },
     }),
   );
@@ -145,18 +146,21 @@ try {
     title: (await banner.locator('.sv-banner-title').textContent())?.trim(),
   };
 
-  // 3. Popup standalone generator fills the add-entry dialog.
+  // 3. Popup inline quick generator produces a usable password.
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/src/popup/popup.html`);
   await popup.bringToFront();
   await popup.waitForTimeout(700);
   const popupShield = popup.locator('#privacyShield');
   if (await popupShield.isVisible().catch(() => false)) await popupShield.click();
-  await popup.locator('#genBtn').click();
-  await popup.locator('#genDialog').waitFor({ state: 'visible', timeout: 5000 });
-  const output = ((await popup.locator('#genOutput').textContent()) || '').trim();
-  await popup.locator('#genUse').click();
-  await popup.waitForTimeout(400);
+  await popup.locator('#quickGenRefresh').click();
+  await popup.waitForTimeout(300);
+  const output = ((await popup.locator('#quickGenOutput').textContent()) || '').trim();
+  await popup.locator('#quickGenCopy').click();
+  await popup.waitForTimeout(300);
+  await popup.locator('#addBtn').click();
+  await popup.locator('#entryDialog').waitFor({ state: 'visible', timeout: 5000 });
+  await popup.locator('#entryPassword').fill(output);
   const entryPassword = await popup.locator('#entryPassword').inputValue();
   result.popupGenerator = {
     outputLength: output.length,

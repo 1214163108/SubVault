@@ -4,21 +4,35 @@
 
 一个只在本机运行的 Chromium 密码管理器扩展（Manifest V3）。它按可控的“主域 / 子域”规则保存和填充网页登录密码，支持导入浏览器导出的密码 CSV，并提供完整的本地密码库管理。
 
-当前扩展版本：**v2.3.1**（本机同步宿主包为 **v1.5.1**，支持多密码库隔离路径、Windows Hello + DPAPI 设备快速解锁与独立 WebDAV 备份）。
+当前扩展版本：**v2.6.5**（本机同步宿主包为 **v1.5.5**，支持多密码库隔离路径、Windows Hello + DPAPI 设备快速解锁、独立 WebDAV 备份与目录自动创建、WebDAV 历史副本列出与清理）。
 
 - 默认规则：同一主域下的所有子域共享账号（`mail.example.com` ↔ `drive.example.com`）。
 - 独立规则：把主域加入“独立主域名”列表后，该主域下每个子域都作为全新域名单独保存、单独匹配。
-- 端口规则：可选开启 localhost / IP 按端口隔离；普通 DNS 域名仍忽略端口。
+- 端口规则：可选开启“按端口隔离”；开启后所有主机（含纯 IP、localhost 与普通域名）都把端口算进匹配键，`example.com:8080` 与 `example.com:9090` 各自独立。
 - 数据只保存在本机：Argon2id / PBKDF2-HMAC-SHA512 + AES-256-GCM 加密；v4 起主密码派生 KEK，KEK 包装随机 VaultKey，条目由 VaultKey 加密；无云端、无账号、无统计、无网络请求。
 - 记录密码时间：每条密码都有“记录时间”；导入时同一站点组、同一账号出现多个密码，按最新时间覆盖合并。
 - 接管 Chrome 自带密码管理器（有限）：标记登录框、检测并清除原生自动填充、使用 SubVault 自有浮层；支持用户名分步登录、iframe 登录和 SPA 登录框；可选关闭 Chrome 的“保存密码”提示。**Chrome 原生钥匙图标和原生密码下拉无法被扩展移除或替换。**
 - 站点例外：对个别网站关闭接管、保存提示或钥匙按钮。
 - 导入：支持 Chrome / Edge / Firefox / Bitwarden / LastPass / 1Password 的 CSV，以及 Bitwarden 未加密 JSON、1Password 1PUX；导入前预演新增/更新/合并/冲突。
-- 备份与恢复：导出 AES-256-GCM 加密备份时同时生成 SHA-256 校验文件；显示最近备份时间、超过 30 天提醒；可下载恢复说明，明确本地密码库无法绕过主密码恢复。备份可设置独立密码与有效期，有效期参与 KDF 绑定，过期后原密码也无法解密。
-- 组织管理：收藏、文件夹、标签、最近使用排序、批量收藏/删除；支持弱密码/重复/超龄/HTTP 明文/含动态码筛选。
-- TOTP：支持 Base32、`otpauth://totp/...`、二维码图片导入；选择账号填充时自动填写当前 OTP 字段。popup 与设置页提供“动态验证码”快捷入口和 30 秒倒计时进度条。
+- 备份与恢复：导出 AES-256-GCM 加密备份时同时生成 SHA-256 校验文件；显示最近备份时间、超过 30 天提醒；可下载恢复说明，明确本地密码库无法绕过主密码恢复。备份可设置独立密码与有效期，有效期参与 KDF 绑定，过期后原密码也无法解密。备份、同步快照、恢复说明等私有文件统一写入 `.svbak` 二进制容器（`SVBAK` 魔数 + gzip），改后缀无法直接阅读或编辑；恢复说明可先在设置页弹窗内查看再下载。导出备份或分享文件时可勾选“同时生成密钥文件”，会额外下载一个 40 字节的 `.svkey`（`SVKEY` 魔数）；它不含密码，只作为第二因素与密码一起参与 KDF，备份/分享文件头部记录 `keyFileFingerprint`，导入时缺少密钥文件或换成别的密钥文件都会直接拒绝。密钥文件为可选：不勾选则仍是仅密码加密。
+- 组织管理：收藏、文件夹、标签、最近使用排序、批量收藏/删除；支持弱密码/重复/超龄/HTTP 明文/含动态码筛选，并可按站点、标签组合过滤。
+- 可点击统计与行内操作：顶部 6 个统计卡与健康度圆环都可点击直达对应筛选；账号行的操作按钮全部平铺显示（收藏、复制密码、密码历史、显示、编辑、删除），不再有折叠菜单；带动态码的账号在账号信息右侧显示一枚实时刷新的验证码胶囊，与操作按钮同处一行（窄屏时整行自动换行）。
+- 站点图标：通过 `chrome._favicon` 显示真实站点图标，加载失败自动回退到首字母头像。
+- 密码库仪表盘：健康度圆环按弱密码、重复、超龄、HTTP 明文扣分；站点分布条形图展示账号最多的站点。
+- 回收站与撤销：删除需二次确认，确认后右上角出现 5 秒倒计时撤销条；删除的账号保留在回收站，工具栏“回收站”按钮带数量徽标，点击打开独立弹窗查看与恢复，列表在弹窗内滚动，不会把密码库列表推得很长；可逐条恢复或一键清空。回收站默认保留 30 天，可在“通用”里改为 7/30/90/365 天或永久保留（上限 100 条）。
+- 密码到期提醒：可设置 90/180/365/730 天或关闭，“超过 N 天未改密码”统计与筛选会跟随该设置。
+- 存储上限：申请 `unlimitedStorage`，设置页按 50 MB 预算显示占用，避免大量 KDBX/历史条目触顶。
+- TOTP：支持 Base32、`otpauth://totp/...`、`otpauth://hotp/...&counter=N`、`steam://...` 与二维码图片导入（Chrome 自带 `BarcodeDetector` 不可用时自动回退到内置离线解码器 `jsQR`，无需联网）；TOTP 按时间刷新，HOTP 按计数器递增（“生成下一个”按钮显式 +1 并写回密码库），Steam Guard 生成 5 位字母数字码。HOTP 不会自动展示，避免静默消耗计数器；选择账号填充时自动填写当前 OTP 字段。popup 与设置页提供“动态验证码”快捷入口和倒计时进度条。
+- 网页动态码提示：只在聚焦验证码输入框时于网页右上角弹出当前站点验证码卡片，含复制、填入、关闭与可配置倒计时条（默认 5 秒）；不再在每个页面自动弹出。
+- popup 2.6：动态码跟随账号显示在账号行内并放大到 21px 等宽字体，账号为列表主行，域名不再重复显示；只展示当前站点匹配的账号，保持紧凑布局；内联“快速生成密码”直接生成/复制，长度与字符集参数平铺在下方。
+- 网页动态码识别：覆盖 Gitee 等分段验证码控件（无 `name`/`id`/`placeholder`，仅 `aria-label` 或 `vi__` 结构），也支持 6 个单字符输入框组成的验证码组。
+- 生成器参数：设置页“安全与接管”新增“默认密码生成器”，长度 8–128、字符集、易读模式可配置；条目生成、KDBX/备份/分享导出密码按钮统一使用该组参数。
+- WebDAV：首次备份会自动创建缺失目录（修复坚果云等服务器 `409 AncestorsNotFound`），仍保持独立备份/恢复，不参与实时同步。
+- WebDAV 定时自动备份：可按 1–168 小时定时备份，并在每次备份后按“保留最近 N 份（0–200）”与“删除超过 N 天（0–3650）”清理远端历史副本；两者都为 0 时不删除任何副本。设置页可查看远端历史副本列表并手动按规则清理。
+- 首次安装从 WebDAV 恢复：解锁/创建界面提供“已有 WebDAV 备份？从远端恢复”，填写地址、账号、密码与备份的主密码即可直接拉取并解锁，不会先创建一个空的临时密码库。
 - 工具栏角标：显示当前标签页匹配到的已保存账号数量；锁定状态显示锁标记。
-- 材质外观：支持经典纯色、磨砂玻璃、液态玻璃，可配合浅色/深色主题使用；六种组合在 popup、设置页与网页提示中统一生效。
+- 右键菜单与快捷键：页面右键可“用 SubVault 填充此页面 / 生成随机密码并复制 / 打开账号面板”；`Ctrl+Shift+L` 填充、`Ctrl+Shift+K` 立即锁定、`Ctrl+Shift+U` 打开账号面板（macOS 使用 `Command`）。
+- 材质外观：支持经典纯色、磨砂玻璃、液态玻璃，可配合浅色/深色主题使用；新增 6 套强调色、柔和/强/极强三档玻璃强度、柔和/圆润/方正三档圆角，popup、设置页与网页提示即时统一生效。
 - 解锁即时同步：解锁后已打开的标签页立刻可用，无需刷新。
 - 注册场景：注册表单密码框旁提供“⚡ 生成强密码”，自动填入密码与确认框，提交后提示保存新账号。
 - 主密码强度：本地 zxcvbn 强制评估（< 50 bits 拒绝，50–59 bits 需勾选确认，≥ 60 bits 通过），全程离线。
@@ -27,6 +41,8 @@
 - 离线弱密码检测：内置 10,001 条常见密码的 SHA-256 摘要（不存明文），健康检查直接标记弱密码。
 - 隐私遮罩：切换标签页或窗口失焦时立即遮住 popup/设置页内容，可在“通用 → 窗口失焦时自动隐藏内容”关闭；复制密码提示“30 秒后自动清除”。
 - 双语界面：可跟随 Chrome UI 语言，也可在设置中强制简体中文 / English（`_locales` + 本地字典，零网络）。
+- 统一设计系统：设置页与 popup 共用字号阶梯（`--fs-2xs` … `--fs-3xl`）与颜色令牌，媒体查询合并为 4 档，支持 `prefers-reduced-motion` 与统一 `:focus-visible` 焦点环。
+- 侧栏分组：设置侧栏按“密码库 / 日常使用 / 数据 / 其他”分组，窄屏自动横向滚动。
 - 可访问性：填充浮层提供 `aria-haspopup` / `aria-expanded` / `aria-activedescendant` 与 roving tabindex，键盘和屏幕阅读器可用。
 - Windows Hello 设备快速解锁：启用时创建平台认证器凭据，解锁时先做 Windows Hello 交互验证，再由宿主用 DPAPI 解保护本机 VaultKey；没有可用认证器时无法启用设备快速解锁，主密码始终可回退。
 - WebDAV 独立备份：与“本机同步”完全分开，只做加密备份与恢复，不参与实时双向同步；恢复以 WebDAV 备份为准，覆盖当前库并要求重新解锁。
@@ -34,6 +50,7 @@
 - 一次性分享：`.svshare` 使用独立密码加密，过期时间参与 KDF 与 AAD；界面明确“未勾选条目不分享”，默认不勾选任何账号，可按名称/站点/用户名/标签筛选。
 - 导出密码：KDBX、加密备份、一次性分享的密码输入框都提供“生成”按钮，生成 20 位易读强随机密码。
 - 密钥文件：可选双因素解锁，主密钥由主密码 + 密钥文件共同派生；文件内容不落盘。
+- 导出密钥文件（`.svkey`）：备份与一次性分享导出时可选生成，导入时必须提供同一文件才能解密；文件不包含任何密码，可与备份文件分开保存。
 - VaultKey 密钥层次（v4）：主密码经 Argon2id/PBKDF2 派生 KEK，KEK 只包装一个随机 VaultKey，条目由 VaultKey 加密；修改主密码或更换密钥文件只重包 VaultKey，不重新加密整个密码库。旧格式密码库首次正确解锁时自动迁移，并保留迁移前的密文备份；设置页可回滚到迁移前格式，下一次解锁会再次迁移。修改主密码或密钥文件后迁移备份会清除，避免用旧凭据回滚。
 - 设备快速解锁（v2.2.0，仅 Windows）：启用后由同步宿主使用当前 Windows 用户的 DPAPI 保护一份仅限本机的 VaultKey 副本；扩展不保存主密码，绑定不参与同步。主密码始终可回退；删除密码库、回滚格式或移除绑定时会自动删除宿主侧副本。
 - KDBX 互操作：本地导入/导出 KeePass 3/4 `.kdbx`，支持密钥文件、分组、标签、自定义字段、密码历史与附件名；导入前逐条预演，已存在条目默认不勾选。
@@ -75,7 +92,7 @@
 - 默认：`mail.example.com` 保存的账号，会在 `drive.example.com`、`example.com` 等同一主域下出现。
 - 独立：`mail.example.com`、`drive.example.com` 各自保存、各自匹配，互不共享；`example.com` 本身也独立。
 - 配置入口：设置页 → **子域规则** → 添加主域名。
-- localhost / IP 端口隔离：设置页 → **子域规则** → 打开“localhost / IP 按端口隔离”。开启后 `localhost:3000` 与 `localhost:4000` 各自独立；`example.com:8080` 仍按主域规则忽略端口。
+- 按端口隔离：设置页 → **子域规则** → 打开“按端口隔离”。开启后端口参与匹配：`localhost:3000` 与 `localhost:4000` 各自独立，`example.com:8080` 与 `example.com:9090` 也各自独立，纯 IP 如 `192.168.1.10:5000` 同样独立；不带端口的地址仍按主机名匹配。
 - 规则修改**不会删除已有数据**；保存、填充、导入合并会立即按新规则执行。
 - 主域使用内置的完整 Public Suffix List（ICANN + PRIVATE 段，含 wildcard / exception 规则），离线解析，不联网查询。
 - 自动弹出账号选择：可选开启“聚焦时自动弹出”；默认关闭，避免和 Chrome 原生密码下拉重叠。
@@ -104,8 +121,8 @@ PSL 的边界：
 
 - 只影响**默认主域共享规则**；
 - 把某个主域加入“独立主域名”后，不再按 PSL 聚合，该主域及所有子域各自使用完整主机名；
-- localhost / IP 不做 PSL 聚合；
-- PSL 不读取端口，普通 DNS 域名仍忽略端口；
+- localhost / IP 不做 PSL 聚合，直接使用完整主机名；
+- PSL 不读取端口；端口只由“按端口隔离”开关决定是否参与匹配；
 - 内置快照包含 **10,406 条规则**，来源是 `https://publicsuffix.org/list/public_suffix_list.dat`；
 - 离线文件为 `src/lib/psl-data.js`；更新时执行 `python tools/build-psl.py` 并重新打包，不需要联网运行。
 
@@ -134,7 +151,7 @@ PSL 的边界：
 
 ### 从 zip 加载
 
-解压 `dist/subvault-2.3.1.zip`，按上面的步骤加载解压后的目录。
+解压 `dist/subvault-2.5.0.zip`，按上面的步骤加载解压后的目录。
 
 > 需要 Chromium 111+（`chrome.storage.session`、`chrome.privacy`、CSS `color-mix` 等）。
 
@@ -146,7 +163,7 @@ PSL 的边界：
 
 ### 安装宿主
 
-1. 解压 `dist/subvault-sync-host-1.5.1.zip`；
+1. 解压 `dist/subvault-sync-host-1.5.3.zip`；
 2. Windows：右键 `install-host.ps1` → 使用 PowerShell 运行，或执行：
 
 ```powershell
@@ -183,7 +200,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall-host.ps1 -Remove
 注意：
 
 - 删除扩展会删除该浏览器里的本地密码库，请先导出加密备份；
-- `-RemoveData` / `--remove-data` 会删除宿主的 `data` 目录（Windows 回退路径为 `%LOCALAPPDATA%\SubVaultSync`）；
+- `-RemoveData` / `--remove-data` 会删除 `%LOCALAPPDATA%\SubVaultSync`（macOS/Linux 为 `~/Library/Application Support/SubVaultSync` 或 `${XDG_CONFIG_HOME:-~/.config}/SubVaultSync`），以及旧版本留在宿主目录的 `data`；
 - 卸载宿主不会删除各浏览器扩展自己的本地密码库。
 
 ### 首次同步
@@ -231,7 +248,7 @@ WebDAV 备份规则：
 - 默认库写入 `<WebDAV 地址>/subvault/state.json`；多密码库写入 `<WebDAV 地址>/subvault/<密码库 ID>/state.json`，各库互不覆盖。
 - 内容为 `{revision, updatedAt, vault, settings, ignores}`；`vault` 仍是扩展的 Argon2id/PBKDF2 + AES-256-GCM 密文。
 - 地址必须是 HTTPS；仅 `http://127.0.0.1` / `http://localhost` 允许用于本机测试。Basic Auth 用户名/密码随每条宿主命令临时传递，宿主不写入磁盘。
-- “立即备份到 WebDAV”会检查远端 revision，若远端已有更新的备份会拒绝覆盖并提示先恢复。
+- “立即备份到 WebDAV”会检查远端 revision，若远端已有更新的备份会拒绝覆盖并提示先恢复；每次备份成功后，除覆盖 `state.json` 外还会在同一目录写一份带时间的副本 `subvault-YYYYMMDD-HHmmss.json`，设置页显示上次备份的文件名。
 - “从 WebDAV 恢复”必须输入当前库的主密码（如启用密钥文件还需选择文件），确认后覆盖当前密码库、清空解锁会话并要求重新解锁；恢复以远端备份数据为准。
 - WebDAV 备份与本地同步各用独立的配置和状态，启用/清除 WebDAV 不会改变本机同步。
 
@@ -251,21 +268,32 @@ WebDAV 备份规则：
 
 按顺序检查：
 
-1. 宿主目录下是否生成 `data\state.json`；没有生成说明宿主没有连接成功；
+1. 用户数据目录下是否生成 `state.json`（Windows 为 `%LOCALAPPDATA%\SubVaultSync\state.json`）；没有生成说明宿主没有连接成功；
 2. 在**浏览器 A** 打开一次设置页或 popup，让扩展把已有密码库上传到宿主（旧密码库在宿主安装前创建时尤其需要）；
 3. 确认 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.subvault.sync`（Edge/Brave 对应路径）指向新解压目录的 `com.subvault.sync.json`；
 4. 重新在 `chrome://extensions` 加载最新扩展，固定 ID 必须为 `domeipmeogohlofgahadfifjecafipeb`；
 5. 浏览器 B 首次打开设置页或 popup，本地尚未创建密码库且宿主有数据时，才会显示“导入已有密码库”提示。
 
-如果宿主目录被移动或重命名，重新运行 `install-host.ps1`，否则注册表里的旧路径会失效。
+如果宿主目录被移动或重命名，重新运行 `install-host.ps1`，否则注册表里的旧路径会失效。数据存放在固定的用户数据目录，不受宿主位置影响；旧版本留在宿主目录 `data/` 里的文件会在首次启动时自动迁移过去。
 
 ### 同步没有更新
 
 1. 确认浏览器 A/B 都已解锁；锁定状态下只保存密文，不会应用远程数据；
 2. 打开浏览器 B 的设置页或 popup，触发立即补拉（扩展还有每分钟自动对账）；
-3. 检查宿主目录下 `data\state.json` 的修改时间是否变化；
+3. 检查用户数据目录下 `state.json`（Windows 为 `%LOCALAPPDATA%\SubVaultSync\state.json`）的修改时间是否变化；
 4. 两端同时修改同一账号会触发 revision 冲突，当前不会自动合并；
-5. 如果浏览器 A 是旧版扩展或没有重新加载，A 的保存不会发布到宿主，请在 `chrome://extensions` 重新加载。
+5. 如果浏览器 A 是旧版扩展或没有重新加载，A 的保存不会发布到宿主，请在 `chrome://extensions` 重新加载；
+6. 如果设置页显示“密码库不一致”，说明远端那份和本机这份是两个不同的密码库（通常是宿主目录换过、或另一台机器往同一目录写过）。同步会停在那里保护两份数据，不会互相覆盖；先各导出一份 `.svbak` 备份，再决定保留哪一份。
+
+### 提示“主密码错误，或密码库数据已损坏”
+
+这句话只有一个含义：拿当前主密码解不开远端那份密文。常见原因按概率排序：
+
+1. 两端主密码不同（例如 B 用的是自己新设的密码，而不是 A 的）；
+2. 远端那份启用了密钥文件，而这里没选 `.svkey`（新版本会单独提示“该密码库启用了密钥文件”）；
+3. 远端那份其实是另一个密码库——新版本会直接提示“不是同一个密码库”，不再落到这条文案上。
+
+先用本机密码库解锁，确认能正常看到自己的账号；再导出备份，然后才尝试重新导入。
 
 ## 四、日常使用
 
@@ -275,7 +303,7 @@ WebDAV 备份规则：
 
 - **解锁即时生效**：在 popup 或设置页解锁后，已打开的标签页会收到广播并立即出现账号按钮，无需刷新页面。
 - **注册流程**：注册表单（`autocomplete="new-password"`、同表单多个密码框或“注册/Register/Sign Up”按钮）聚焦密码框时会显示“⚡ 生成强密码”按钮；点击后用本地随机数生成并同时填入密码与确认密码框，提交后提示“保存新账号”。
-- **独立生成器**：popup 顶部 ⚡ 按钮可独立生成密码，支持长度 8–64、大小写/数字/符号开关、纯数字 PIN、易读模式（剔除易混淆字符），可复制或直接“用于新账号”。
+- **快速生成器**：popup 内联“快速生成密码”支持长度 8–128、大小写/数字/符号开关、易读模式（剔除易混淆字符），参数平铺在生成结果下方并与设置页默认生成器共用；可复制或直接“用于新账号”。
 - **主密码强度**：创建/修改主密码时使用本地打包的 zxcvbn 估算强度。低于 50 bits 直接拒绝；50–59 bits 显示红色警告并要求显式勾选确认；≥ 60 bits 通过。评估完全离线，不发送密码。
 - **自动弹出账号选择**：设置 → 安全与接管 → 打开“聚焦时自动弹出账号选择”。开启后点击/聚焦**账号框**会直接打开 popover，仍需点击或回车选择，不会自动提交。默认关闭；如果浏览器自带密码下拉仍存在，建议先删除浏览器保存的密码，再开启此选项，避免两个下拉同时出现。
 - **提示位置与主题**：设置页 → 安全与接管 → 保存提示位置，可选左上、右上、左下、右下、居中；“账号已填入 / 新增 / 更新”等所有页面提示都会跟随此位置。主题外观可选跟随系统、浅色、深色；界面材质可选经典纯色、磨砂玻璃、液态玻璃，影响扩展页面、popup、账号选择框和网页内提示。
@@ -384,7 +412,7 @@ WebDAV 备份规则：
 - **自动锁定**：默认 15 分钟无操作清除内存密钥，可自定义；也可立即锁定。
 - **剪贴板**：复制密码会写入系统剪贴板。设置页可配置 15/30/60/120 秒后尝试清空，并提供“立即清除剪贴板”按钮；如果浏览器不允许读取剪贴板，自动清除会跳过，请使用按钮。
 - **备份**：备份包含账号、设置、子域规则、站点例外与 Passkey 记录，不包含主密码或派生密钥。可以填写独立的备份密码，用新的随机盐重新加密；恢复支持合并或覆盖模式，覆盖前会先导出当前快照。设置有效期时必须使用独立备份密码，`expiresAt` 会参与 KDF 绑定和 AAD，过期后即使知道原密码也无法解密。独立备份密码不会保存在扩展中。
-- **本机同步宿主**：Windows 的 `SubVaultSync.exe` 与 macOS/Linux 的 Go 宿主只保存加密密码库密文和同步设置（可执行文件旁的 `data/state.json`，不可写时回退到用户配置目录），不接触主密码或派生密钥；仅接受固定扩展 ID 的 Native Messaging 连接。启用 WebDAV 备份后，宿主会按配置向 HTTPS 服务器发起 `GET`/`PUT`/`MKCOL` 请求，但不会监听端口，也不会把凭据写入磁盘。设备快速解锁的 DPAPI 绑定文件（`device.json` / `device-<id>.json`）只存在于宿主数据目录，不会上传或同步。
+- **本机同步宿主**：Windows 的 `SubVaultSync.exe` 与 macOS/Linux 的 Go 宿主只保存加密密码库密文和同步设置（固定写入用户数据目录：Windows `%LOCALAPPDATA%\SubVaultSync\state.json`，不可写时才回退到可执行文件旁的 `data/`），不接触主密码或派生密钥；仅接受固定扩展 ID 的 Native Messaging 连接。启用 WebDAV 备份后，宿主会按配置向 HTTPS 服务器发起 `GET`/`PUT`/`MKCOL` 请求，但不会监听端口，也不会把凭据写入磁盘。设备快速解锁的 DPAPI 绑定文件（`device.json` / `device-<id>.json`）只存在于宿主数据目录，不会上传或同步。
 - **密钥文件（双因素解锁）**：可选启用一个任意内容的本地文件。启用后，主密钥由“主密码 + 密钥文件 SHA-256”共同派生；密钥文件内容不写入扩展存储，只参与本地派生。丢失密钥文件无法解锁，需要在设置页明确停用（需主密码 + 当前密钥文件）后才能恢复单密码解锁。
 - **KDBX 互操作**：KeePass 2.x `.kdbx` 的导入/导出完全在本地完成（kdbxweb 2.x，MIT，Argon2 由打包的 hash-wasm 提供），不会上传文件；导出密码独立于 SubVault 主密码。
 - **一次性分享**：`.svshare` 使用独立分享密码和随机盐加密；v2 起有效期同时参与 KDF salt 绑定与 AES-GCM AAD，修改 `expiresAt` 会导致密钥不一致，过期文件即使知道密码也无法解密。离线文件无法真正“阅后即焚”，界面已明确提示。
@@ -506,6 +534,7 @@ node tests/backend.test.js
 node tests/strength.test.js
 node tests/kdbx-map.test.js
 node tests/share.test.js
+node tests/container.test.js
 
 # Bitwarden JSON 导入 UI
 node tools/test-import-e2e.mjs
@@ -541,8 +570,17 @@ node tools/test-webdav-backup-e2e.mjs
 # TOTP 快捷面板/倒计时、Passkey 编辑、导出密码生成
 node tools/test-totp-passkey-e2e.mjs
 
+# v2.6.0：HOTP/Steam Guard 动态码、右键菜单与快捷键
+node tools/test-hotp-steam-e2e.mjs
+node tools/test-shortcuts-e2e.mjs
+
+# v2.6.0：WebDAV 定时自动备份/历史副本清理、首次安装从 WebDAV 恢复
+node tools/test-webdav-auto-e2e.mjs
+node tools/test-webdav-gate-e2e.mjs
+
 # 浅色材质提示条与失焦遮罩开关
 node tools/test-toast-privacy-e2e.mjs
+node tools/test-appearance-e2e.mjs
 
 # 密钥文件双因素解锁（后台协议 + popup/options UI）
 node tools/test-keyfile-e2e.mjs
@@ -602,7 +640,7 @@ pnpm exec playwright test
 E2E 覆盖：加载未打包扩展 → 创建密码库 → 通过设置页添加账号 → 打开本地登录页 → 通过内容脚本填充用户名和密码。  
 仓库中的 `tools/playwright-smoke.mjs` 已用 Playwright API + Chromium 实际跑通；官方 `playwright test` CLI 在当前环境会卡在 worker 启动，因此没有把它当作已验证结果。
 
-后端集成测试使用 Node 中的 `chrome` API mock，覆盖：创建密码库、默认主域共享、独立主域隔离、CSV 导入预演与时间合并、Bitwarden JSON / 1PUX 解析、独立密码备份/覆盖恢复、站点例外、重复账号合并、localhost 端口隔离、TOTP、收藏标签、密码历史、锁定/解锁。当前共 58 个 Node 测试通过（含 zxcvbn 主密码强度 5 项、生成器/弱密码摘要 7 项、KDBX 映射 7 项、VaultKey 包装 3 项、分享过期绑定 6 项）。
+后端集成测试使用 Node 中的 `chrome` API mock，覆盖：创建密码库、默认主域共享、独立主域隔离、CSV 导入预演与时间合并、Bitwarden JSON / 1PUX 解析、独立密码备份/覆盖恢复、站点例外、重复账号合并、按端口隔离（localhost、纯 IP、普通域名）、TOTP、收藏标签、密码历史、锁定/解锁。当前共 14 个测试文件、443 条断言全部通过（含 zxcvbn 主密码强度、生成器/弱密码摘要、KDBX 映射、VaultKey 包装、分享过期绑定、`.svbak` 私有容器、`.svkey` 密钥文件结构与其在备份/分享中的绑定、HOTP/Steam 向量、按端口隔离对 localhost / 纯 IP / 普通域名的覆盖）。
 
 Playwright Chromium API E2E 已通过：
 - `tools/playwright-smoke.mjs`：创建密码库、添加账号、真实登录页填充；
@@ -616,15 +654,30 @@ Playwright Chromium API E2E 已通过：
 - `tools/test-hello-gate-e2e.mjs`：伪造平台认证器，验证启用设备解锁会先走 Windows Hello 创建凭据，锁定后必须完成断言才能调用 DPAPI 解锁；
 - `tools/test-totp-passkey-e2e.mjs`：TOTP popup/设置页快捷面板与倒计时、Passkey 记录回填、KDBX/备份密码生成按钮；
 - `tools/test-toast-privacy-e2e.mjs`：浅色磨砂/液态提示条文字对比度、失焦遮罩开关。
+- `tools/test-appearance-e2e.mjs`：强调色、玻璃强度、圆角、主题材质在设置页/popup/网页浮层的继承与切换。
+- `tools/test-v240-features-e2e.mjs`：健康度/站点图、站点+标签组合筛选、删除撤销、回收站弹窗恢复/清空与数量徽标、生成器参数、导出密码生成、网页动态码只在聚焦验证码框时出现、popup 内联快速生成与平铺参数。
+- `tools/test-otp-detect-e2e.mjs`：复刻 Gitee 2FA 控件（仅 `aria-label="verification input"`、`vi__` 结构）与 6 个无属性单字符输入框，验证聚焦后网页动态码卡片出现、可填入，且搜索框/手机号/数量/邮编等普通输入框不误判。
+- `tools/test-backup-container-e2e.mjs`：加密备份、同步快照、恢复说明均为 `.svbak` 二进制容器，改后缀为 `.txt` 无法阅读但仍可恢复，随意文件被拒绝，恢复说明可在弹窗内查看。
+- `tools/test-keyfile-export-e2e.mjs`：备份/分享导出时同时生成 40 字节 `.svkey`（`SVKEY` 魔数），备份头写入 `keyFileFingerprint`；导入时缺少密钥文件、换成别的密钥文件都被拒绝，提供正确密钥文件后恢复成功；分享导入同样要求密钥文件。
+- `tools/test-hotp-steam-e2e.mjs`：RFC 4226 全部计数器向量、HOTP 显式 +1 并写回密码库、Steam Guard 5 位字母数字码、HOTP 不进入网页自动动态码、popup 行内显示 `#N`/`Steam Ns` 且不静默消耗计数器。
+- `tools/test-context-menu-e2e.mjs`：用记录器替换 `chrome.contextMenus`，验证并发重建不会产生重复 id，并检查关闭浮动入口后菜单被清除。
+- `tools/test-shortcuts-e2e.mjs`：`fill-login`/`lock-vault`/`open-popup` 三个快捷键已注册，右键菜单生成密码填入焦点框或复制、填充快捷键与锁定后清空输入框。
+- `tools/test-webdav-auto-e2e.mjs`：定时自动备份 alarm 周期、未到期跳过、按保留份数与过期天数清理历史副本、两者为 0 时不删除、设置页自动备份 UI 与历史副本列表。
+- `tools/test-webdav-gate-e2e.mjs`：全新安装时从 WebDAV 恢复向导（入口可见性、URL/主密码校验、错误凭据与错误主密码提示、不创建空密码库、恢复后自动解锁并保留远端配置）。
+- `tools/screenshot-v241.mjs`：生成 v2.4.1 的设置页生成器卡、统一撤销提示、popup 与 popup 生成器截图（`docs/ui-2.4.1-*.png`）。
+- `tools/screenshot-v250.mjs`：生成 v2.5.0 的密码库页、回收站弹窗与 popup 截图（`docs/ui-2.5.0-*.png`）。
+- `tools/test-qr-import-e2e.mjs`：强制移除 `BarcodeDetector`，用内置 jsQR 离线识别生成的 otpauth 二维码 PNG，并验证无二维码图片给出可读错误、保存后动态码可正常生成。
+- `tools/screenshot-v260.mjs`：生成密码库页、平铺行内操作与行内动态码、WebDAV 自动备份卡片、popup 与首次安装恢复向导截图（`docs/ui-2.6.0-*.png`、`docs/ui-2.6.1-*.png`）。
 
 官方 `playwright test` CLI 在当前环境会卡在 worker 启动，因此没有把它当作已验证结果；`tests/e2e/extension.spec.js` 仍保留给可正常运行 Playwright Test 的环境。
 
 本机同步另外有：
 - `tools/test-native-host.mjs`：Native Messaging 宿主的 status / publish / pull / revision 冲突；
 - `tools/test-sync-center-e2e.mjs`：两个 profile 的状态中心、四种触发方式、冲突 UI 与“使用远端版本”；
-- `tools/test-webdav-host.mjs`：Go/C# 宿主的 WebDAV 协议（Basic Auth、MKCOL、ETag/304/412、错误密码、非 HTTPS 拒绝）；
-- `tools/test-webdav-backup-e2e.mjs`：WebDAV 独立备份/恢复；本机修改后备份、修改本地库、用主密码恢复并重新解锁，确认恢复以远端备份为准且不影响本机同步；
+- `tools/test-webdav-host.mjs`：Go/C# 宿主的 WebDAV 协议（Basic Auth、MKCOL、ETag/304/412、错误密码、非 HTTPS 拒绝、历史备份副本写入与 `name`/`archiveError` 返回）；
+- `tools/test-webdav-backup-e2e.mjs`：WebDAV 独立备份/恢复；本机修改后备份、修改本地库、用主密码恢复并重新解锁，确认恢复以远端备份为准且不影响本机同步；同时校验备份文件名带时间戳、`state.json` 与历史副本两次 PUT 都成功、设置页显示上次备份文件名；
 - `tools/test-sync-e2e.mjs`：浏览器 A 创建并上传，浏览器 B 首次导入，A 后续修改实时到达 B；并模拟 B 的 service worker 重启后补拉漏掉的修改。
+- `tools/test-sync-identity-e2e.mjs`：同一宿主目录里出现两个不同密码库时，同步停下并提示“不是同一个密码库”，既不覆盖远端也不误报主密码错误。
 
 填充 UI 另外有：
 - `tools/test-popover-e2e.mjs`：真实 Chromium 加载扩展，验证账号框锚定、密码框不显示按钮、输入框实时过滤/空输入显示全部、自动弹出、键盘、iframe、open shadow DOM、用户名分步登录，以及窗口缩放后仍能打开并选择账号；同时校验工具栏角标、账号主标题 Toast、居中位置、深色主题、液态玻璃材质和 OTP 自动填充。
@@ -667,6 +720,16 @@ Playwright Chromium API E2E 已通过：
 
 ## 十三、版本记录
 
+- **v2.6.0**：新增 HOTP 与 Steam Guard 动态码（显式计数器 +1、不自动消耗）、右键菜单与 `Ctrl+Shift+K` 锁定 / `Ctrl+Shift+U` 打开面板、WebDAV 定时自动备份与历史副本按份数/天数清理、首次安装直接从 WebDAV 恢复；密码库页 6 个统计卡与健康度圆环可点击直达筛选、站点 favicon；设置侧栏分四组、统一字号与颜色令牌、断点合并为 4 档并补齐 `prefers-reduced-motion` 与 `:focus-visible`；新增回收站保留天数与密码到期提醒设置。
+- **v2.6.1**：账号行操作按钮全部平铺显示（去掉折叠菜单）、二维码导入在缺少 `BarcodeDetector` 时回退到内置 jsQR 离线解码、移除 popup 全库搜索以恢复紧凑布局、“按端口隔离”扩大到所有主机（纯 IP 与普通域名同样按端口区分）。
+- **v2.6.5**：同步增加“同一密码库”校验。远端与本地是两个不同密码库时（宿主数据目录换过、或另一台机器往同一目录写过），现在会直接停下并提示“远端密码库与当前密码库不是同一个，已停止同步以免互相覆盖；请先导出备份，再决定保留哪一份”，不再让两端互相覆盖，也不再把这个情况报成“主密码错误，或密码库数据已损坏”。判断依据是密码库创建时间（`createdAt`，加密前后都不变），不需要解密；一旦发现不是同一个库，既不会推送本地库覆盖远端，也不会把远端的库当成自己的密码错误。新增 `tools/test-sync-identity-e2e.mjs` 覆盖该场景。
+- **v2.6.4**：修复本机同步宿主的数据目录。此前宿主把密码库放在可执行文件旁的 `data/`，重装宿主或换一份二进制后，另一端会看到一个空的远端，进而把自己的库推上去覆盖真实的密码库，表现为另一端提示“主密码错误，或密码库数据已损坏”。现在 C# 与 Go 宿主都固定使用用户数据目录（Windows `%LOCALAPPDATA%\SubVaultSync`，macOS/Linux 对应配置目录），并在首次启动时自动把旧 `data/` 里的 `*.json` 迁移过去；只有在用户目录不可写时才回退。同步导入遇到启用密钥文件的库时，也会明确提示“该密码库启用了密钥文件，请选择对应的密钥文件后再试”，不再误报主密码错误；popup 的导入表单同时补上了密钥文件选择框。另外，`tools/test-sync-e2e.mjs` 现在会拒绝指向真实宿主数据目录，避免测试再次清空用户的同步库。
+- **v2.6.3**：备份与一次性分享支持“同时生成密钥文件”。导出时可勾选生成 40 字节 `.svkey`（`SVKEY` 魔数 + 32 字节随机密钥），密钥文件哈希作为第二因素与密码一起参与 KDF；导出记录写入 `keyFileFingerprint`，导入时缺少文件或文件不匹配都会在解密前拒绝并给出明确提示。密钥文件为可选，不勾选时行为与之前一致；勾选时必须同时设置独立备份密码（备份）或分享密码（分享）。
+- **v2.6.2**：修复右键菜单在 service worker 重复启动时报 `Cannot create item with duplicate id subvault-fill/generate/open`（`initialize()` 去重 + 菜单重建串行化并消费 `runtime.lastError`）、动态码改为账号行内的胶囊并每秒刷新、操作按钮回到与账号信息同一行（窄屏仍自动换行）。
+- **v2.5.0**：私有导出格式 `.svbak`（`SVBAK` 魔数 + gzip 二进制容器），加密备份、同步快照、导入/合并/恢复前快照与恢复说明全部改为该格式，改后缀无法直接阅读或修改；恢复说明新增设置页弹窗预览；回收站改为工具栏带数量徽标的独立弹窗，列表在弹窗内滚动，不再把密码库列表推长；popup 账号行以账号为主行、去掉重复域名、动态码放大到 21px 等宽；网页动态码识别覆盖 Gitee 等仅靠 `aria-label`/`vi__` 结构或 6 个单字符输入框组成的验证码控件。
+- **v2.4.1**：统一全部页面提示为“标题 + 说明 + 进度条”的撤销提示样式；WebDAV 每次备份额外写入带时间戳的历史副本并在设置页显示文件名（宿主 1.5.3 同步支持）；网页动态码只在聚焦验证码输入框时出现，popup 改为在账号行内显示动态码与剩余秒数；popup 快速生成参数平铺，去掉“参数”按钮；默认密码生成器移到“安全与接管”分组。
+- **v2.4.0**：新增密码库健康度与站点分布图、站点/标签组合筛选；删除二次确认、5 秒撤销与回收站；存储预算提升到 50 MB；新增默认密码生成器参数并统一所有导出密码按钮；网页动态码提示与可配置倒计时；popup 增加动态码卡片、内联快速生成并重排信息层级；WebDAV 首次备份自动创建目录，修复坚果云 409；玻璃材质提示文字可读性修复。
+- **v2.3.2**：新增界面个性化配置：6 套强调色、柔和/强/极强三档玻璃强度、柔和/圆润/方正三档圆角；统一设置页、popup 与网页浮层的按钮、开关、圆角与玻璃层次；无网页可填充时 popup 自动收敛高度，减少空白。
 - **v2.3.1**：修复旧版设备绑定缺少 Windows Hello 凭据时可能绕过 PIN 直接解锁的问题（宿主强制校验 credentialId，旧绑定需重新启用）；WebDAV 备份卡片迁移到“同步与备份”，统一地址/用户名/密码输入宽度与备份/恢复按钮布局。
 - **v2.3.0**：一次性分享升级 v2（`expiresAt` 参与 KDF 与 AAD），新增分享筛选、默认不勾选与“未勾选条目不分享”提示；加密备份升级 v5（有效期绑定 KDF，独立密码必填）；KDBX/备份/分享导出增加强随机密码生成按钮；TOTP 增加 popup 快捷入口与倒计时进度；Passkey 记录随条目加密/备份；WebDAV 改为独立加密备份与显式恢复，与本机同步彻底分离；Windows Hello 平台认证器 + DPAPI 设备快速解锁；统一文件选择控件。
 - **v2.2.1**：统一文件选择控件（PSL、KDBX、密钥文件、分享导入等）为“选择文件 + 文件名”样式；一次性分享新增账号筛选，并改为默认不勾选，避免误分享整个密码库。
@@ -694,7 +757,7 @@ Playwright Chromium API E2E 已通过：
 
 SubVault 没有服务器、没有账号系统、没有遥测。密码、标题、备注、URL 和设置都只写入当前浏览器配置的本地扩展存储。加密备份由你自行保存；离开本机的只有你主动导出的文件。
 
-启用本机同步后，加密后的密码库密文和同步设置会写入宿主目录下的 `state.json` / `vault-<id>.json`（不可写时回退到 `%LOCALAPPDATA%\SubVaultSync`），由当前用户的 Native Messaging 宿主管理。启用 WebDAV 备份后，宿主只把你指定的 Base URL 与 `/subvault/state.json`（多库为 `/subvault/<id>/state.json`）组合后上传，不会扫描其他路径。设备快速解锁的 DPAPI 绑定文件只在本机宿主目录，包含受保护 VaultKey 与平台凭据 ID，不上传、不同步。宿主无法解密主密码，也不监听网络端口。
+启用本机同步后，加密后的密码库密文和同步设置会写入固定的用户数据目录 `%LOCALAPPDATA%\SubVaultSync`（macOS/Linux 为 `~/Library/Application Support/SubVaultSync` 或 `${XDG_CONFIG_HOME:-~/.config}/SubVaultSync`）下的 `state.json` / `vault-<id>.json`，由当前用户的 Native Messaging 宿主管理。该目录不随宿主安装位置变化，重装或换目录不会丢失密码库。启用 WebDAV 备份后，宿主只把你指定的 Base URL 与 `/subvault/state.json`（多库为 `/subvault/<id>/state.json`）组合后上传，不会扫描其他路径。设备快速解锁的 DPAPI 绑定文件只在本机宿主目录，包含受保护 VaultKey 与平台凭据 ID，不上传、不同步。宿主无法解密主密码，也不监听网络端口。
 
 如果不再使用：先在设置页恢复 Chrome 保存密码提示（如果你开启过），再在 `chrome://extensions` 移除扩展；扩展的本地数据会随扩展移除而删除。需要保留时先导出加密备份。
 

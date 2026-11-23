@@ -3,6 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const ROOT = path.resolve('.');
+// Keep the native host away from the real per-user vault during tests.
+const syncDir = path.join(path.resolve(import.meta.dirname, '..'), '.tmp-host', 'test-vaults-e2e-data');
+fs.rmSync(syncDir, { recursive: true, force: true });
+fs.mkdirSync(syncDir, { recursive: true });
 const PROFILE = path.join(ROOT, '.tmp-vaults', String(Date.now()));
 const MASTER = 'SubVault-Test-2026!Qm7#';
 fs.rmSync(PROFILE, { recursive: true, force: true });
@@ -10,6 +14,7 @@ fs.mkdirSync(PROFILE, { recursive: true });
 
 const context = await chromium.launchPersistentContext(PROFILE, {
   headless: false,
+  env: { ...process.env, SUBVAULT_SYNC_DIR: syncDir },
   args: [
     `--disable-extensions-except=${ROOT}`,
     `--load-extension=${ROOT}`,
